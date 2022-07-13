@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
@@ -33,20 +34,32 @@ import java.util.concurrent.atomic.AtomicLong;
 @RequiredArgsConstructor
 public class WikidataChangesFetcher {
 	public static void main(String[] args) throws IOException, InterruptedException, ExecutionException, ParseException {
-		Option cacheOpt = new Option("-c", "--cache", true, "cache location");
-		Option elementsOpt = new Option("-e", "--element", true, "element to ask to the wiki API");
-		Option wikiapiOpt = new Option("-w", "--wikiapi", true, "Wiki api location");
-		Option dateOpt = new Option("-d", "--date", true, "Wiki api location");
-		dateOpt.setRequired(true);
+		Option cacheOpt = new Option("c", "cache", true, "cache location");
+		Option elementsOpt = new Option("e", "element", true, "element to ask to the wiki API");
+		Option wikiapiOpt = new Option("w", "wikiapi", true, "Wiki api location");
+		Option dateOpt = new Option("d", "date", true, "Wiki api location (required)");
+		Option helpOpt = new Option("h", "help", false, "Print help");
+
 		Options opt = new Options()
 				.addOption(cacheOpt)
 				.addOption(elementsOpt)
 				.addOption(wikiapiOpt)
-				.addOption(dateOpt);
+				.addOption(dateOpt)
+				.addOption(helpOpt);
 
 		CommandLineParser parser = new DefaultParser();
 		CommandLine cl = parser.parse(opt, args);
 
+		if (cl.hasOption(helpOpt)) {
+			HelpFormatter formatter = new HelpFormatter();
+			formatter.printHelp("wikichanges", opt, true);
+			return;
+		}
+		if (!cl.hasOption(dateOpt)) {
+			HelpFormatter formatter = new HelpFormatter();
+			formatter.printHelp("wikichanges", "Date option missing", opt, "", true);
+			return;
+		}
 		Path outputDirectory = Path.of(cl.getOptionValue(cacheOpt, "cache"));
 		int elementPerRead = Integer.parseInt(cl.getOptionValue(elementsOpt, "500"));
 		String wikiapi = cl.getOptionValue(wikiapiOpt, "https://www.wikidata.org/w/api.php");
