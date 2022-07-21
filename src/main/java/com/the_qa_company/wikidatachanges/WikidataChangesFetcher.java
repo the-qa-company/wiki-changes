@@ -3,6 +3,7 @@ package com.the_qa_company.wikidatachanges;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.the_qa_company.wikidatachanges.api.ApiResult;
 import com.the_qa_company.wikidatachanges.api.Change;
+import com.the_qa_company.wikidatachanges.utils.BitmapAccess;
 import com.the_qa_company.wikidatachanges.utils.EmptyIterable;
 import com.the_qa_company.wikidatachanges.utils.MergeIterable;
 import lombok.Getter;
@@ -15,36 +16,70 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.io.file.PathUtils;
+import org.rdfhdt.hdt.enums.RDFNotation;
+import org.rdfhdt.hdt.exceptions.NotFoundException;
+import org.rdfhdt.hdt.exceptions.ParserException;
+import org.rdfhdt.hdt.hdt.HDT;
+import org.rdfhdt.hdt.hdt.HDTManager;
+import org.rdfhdt.hdt.options.HDTOptions;
+import org.rdfhdt.hdt.options.HDTSpecification;
+import org.rdfhdt.hdt.triples.IteratorTripleString;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.FileVisitResult;
+import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.zip.GZIPInputStream;
 
 @RequiredArgsConstructor
 public class WikidataChangesFetcher {
-	public static void main(String[] args) throws IOException, InterruptedException, ExecutionException, ParseException {
+	public static void main(String[] args) throws IOException, InterruptedException, ParseException {
 		Option cacheOpt = new Option("c", "cache", true, "cache location");
 		Option elementsOpt = new Option("e", "element", true, "element to ask to the wiki API");
 		Option wikiapiOpt = new Option("w", "wikiapi", true, "Wiki api location");
+		Option todayOpt = new Option("T", "today", false, "Print date");
 		Option dateOpt = new Option("d", "date", true, "Wiki api location (required)");
+		Option noCacheRecomputeOpt = new Option("C", "nonewcache", false, "Don't recreate the cache");
+		Option clearCacheOpt = new Option("D", "deletecache", false, "Clear the cache after the HDT build");
+		Option maxTryOpt = new Option("m", "maxtry", true, "Number of try with http request, 0 for infinity (default: 5)");
+		Option sleepBetweenTryOpt = new Option("s", "sleeptry", true, "Millis to sleep between try , 0 for no sleep (default: 5000)");
+		Option noHdtRecomputeOpt = new Option("H", "nonewhdt", false, "Don't recompute the HDT");
+		Option hdtLoadOpt = new Option("l", "hdtload", false, "Load the HDT into memory, fast up the process");
+		Option hdtSourceOpt = new Option("s", "hdtsource", true, "Hdt source location (required to compute bitmaps and merge hdt)");
 		Option helpOpt = new Option("h", "help", false, "Print help");
 
 		Options opt = new Options()
 				.addOption(cacheOpt)
 				.addOption(elementsOpt)
 				.addOption(wikiapiOpt)
+				.addOption(todayOpt)
 				.addOption(dateOpt)
+				.addOption(clearCacheOpt)
+				.addOption(noCacheRecomputeOpt)
+				.addOption(maxTryOpt)
+				.addOption(sleepBetweenTryOpt)
+				.addOption(noHdtRecomputeOpt)
+				.addOption(hdtLoadOpt)
+				.addOption(hdtSourceOpt)
 				.addOption(helpOpt);
 
 		CommandLineParser parser = new DefaultParser();
@@ -55,18 +90,41 @@ public class WikidataChangesFetcher {
 			formatter.printHelp("wikichanges", opt, true);
 			return;
 		}
+		if (cl.hasOption(todayOpt)) {
+			System.out.println(Instant.now().toString());
+			return;
+		}
 		if (!cl.hasOption(dateOpt)) {
 			HelpFormatter formatter = new HelpFormatter();
 			formatter.printHelp("wikichanges", "Date option missing", opt, "", true);
 			return;
 		}
 		Path outputDirectory = Path.of(cl.getOptionValue(cacheOpt, "cache"));
+		Path sites = outputDirectory.resolve("sites");
 		int elementPerRead = Integer.parseInt(cl.getOptionValue(elementsOpt, "500"));
 		String wikiapi = cl.getOptionValue(wikiapiOpt, "https://www.wikidata.org/w/api.php");
 		Date date = Date.from(Instant.parse(cl.getOptionValue(dateOpt)));
+		boolean clearCache = cl.hasOption(clearCacheOpt);
+		boolean noHdtRecompute = cl.hasOption(noHdtRecomputeOpt);
+		boolean noCacheRecompute = cl.hasOption(noCacheRecomputeOpt);
+		int maxTry = Integer.parseInt(cl.getOptionValue(maxTryOpt, "5"));
+		long sleepBetweenTry = Long.parseLong(cl.getOptionValue(sleepBetweenTryOpt, "5000"));
+		boolean hdtLoad = cl.hasOption(hdtLoadOpt);
+		Path hdtSource;
+		if (cl.hasOption(hdtSourceOpt)) {
+			hdtSource = Path.of(cl.getOptionValue(hdtSourceOpt));
+		} else {
+			hdtSource = null;
+		}
 
 		if (elementPerRead <= 0) {
 			throw new IllegalArgumentException("elementPerRead can't be negative or zero! " + elementPerRead);
+		}
+		if (maxTry < 0) {
+			throw new IllegalArgumentException("maxTry can't be negative! " + maxTry);
+		}
+		if (sleepBetweenTry < 0) {
+			throw new IllegalArgumentException("sleepBetweenTry can't be negative! " + sleepBetweenTry);
 		}
 
 		System.out.println("Reading from date: " + date);
@@ -76,78 +134,234 @@ public class WikidataChangesFetcher {
 				.url(wikiapi)
 				.build());
 
-		Set<Change> urls = new HashSet<>();
-
-		System.out.print("fetching changes...\r");
-
-		Iterable<Change> changes = fetcher.getChanges(date, elementPerRead, true);
-
-		System.out.println();
-
-		System.out.print("fetching changes: 0\r");
-		for (Change change : changes) {
-			if (!change.getTitle().isEmpty() && change.getNs() == 0) {
-				urls.add(change);
-				System.out.print("fetching changes: " + urls.size() + "\r");
+		if (noCacheRecompute) {
+			if (Files.exists(sites)) {
+				System.out.println("Using cache " + sites);
+			} else {
+				throw new IOException("Using --" + noCacheRecomputeOpt.getLongOpt() + " -" + noCacheRecomputeOpt.getOpt() + " without the cache " + sites);
 			}
+		} else {
+			Set<Change> urls = new HashSet<>();
+
+			System.out.print("fetching changes...\r");
+
+			Iterable<Change> changes = fetcher.getChanges(date, elementPerRead, true);
+
+			System.out.println();
+
+			System.out.print("fetching changes: 0\r");
+			for (Change change : changes) {
+				if (!change.getTitle().isEmpty() && change.getNs() == 0) {
+					urls.add(change);
+					System.out.print("fetching changes: " + urls.size() + "\r");
+				}
+			}
+
+			System.out.println();
+
+			System.out.println("Downloading ttl files...");
+			if (Files.exists(sites)) {
+				PathUtils.deleteDirectory(sites);
+			}
+			Files.createDirectories(sites);
+
+			ExecutorService pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+			Object logSync = new Object() {
+			};
+
+			AtomicLong downloads = new AtomicLong();
+			List<? extends Future<Path>> futures = urls.stream()
+					.map(change -> pool.submit(() -> {
+						Path path = sites.resolve(change.getTitle() + ".ttl");
+						String e = "http://www.wikidata.org/entity/" + change.getTitle();
+						if (!fetcher.downloadPageToFile(
+								new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl?flavor=simple"),
+								path,
+								Map.of(
+										"user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+										"accept", "text/turtle",
+										"accept-encoding", "gzip, deflate",
+										"accept-language", "en-US,en;q=0.9",
+										"upgrade-insecure-requests", "1",
+										"scheme", "https"
+								),
+								maxTry,
+								sleepBetweenTry
+						)) {
+							// write delete triple
+							Files.writeString(path, "");
+						}
+						long d = downloads.incrementAndGet();
+						int percentage = (int) (100L * d / urls.size());
+
+						synchronized (logSync) {
+							System.out.print(
+									"[" +
+											"#".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
+											+ "] (" + d + " / " + urls.size() + " - " + percentage + "%)       \r"
+							);
+						}
+						return path;
+					}))
+					.toList();
+
+			try {
+				for (Future<Path> f : futures) {
+					f.get();
+				}
+			} catch (ExecutionException e) {
+				pool.shutdownNow();
+				long d = downloads.get();
+				int percentage = (int) (100L * d / urls.size());
+				throw new IOException("Wasn't able to download all the files: " + d + "/" + urls.size() + " " + percentage + "%", e.getCause());
+			}
+
+			System.out.println();
+
+			pool.shutdown();
 		}
 
+		Set<String> subjects = fetcher.fetchSubjectOfCache("http://www.wikidata.org/entity/", sites);
+
 		System.out.println();
+		System.out.println("Read " + subjects.size() + " subject(s).");
 
-		ExecutorService pool = Executors.newFixedThreadPool(100);
+		System.out.println("Creating HDT from cache");
 
-		Object logSync = new Object() {
-		};
+		Path hdtLocation = outputDirectory.resolve("sites.hdt");
 
-		System.out.println("Downloading ttl files...");
-		Path sites = outputDirectory.resolve("sites");
-		Files.createDirectories(sites);
+		if (noHdtRecompute) {
+			if (Files.exists(hdtLocation)) {
+				System.out.println("Using hdt " + hdtLocation);
+			} else {
+				throw new IOException("Using --" + noHdtRecomputeOpt.getLongOpt() + " -" + noHdtRecomputeOpt.getOpt() + " without the hdt " + hdtLocation);
+			}
+		} else {
+			fetcher.createHDTOfCache(sites, "http://www.wikidata.org/entity/", hdtLocation, clearCache);
+			System.out.println("cache converted into: " + hdtLocation);
+		}
 
-		AtomicLong downloads = new AtomicLong();
-		List<? extends Future<Path>> futures = urls.stream()
-				.map(change -> pool.submit(() -> {
-					Path path = sites.resolve(change.getTitle() + ".ttl");
-					fetcher.downloadPageToFile(new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl"), path);
-					long d = downloads.incrementAndGet();
-					int percentage = (int) (100L * d / urls.size());
 
-					synchronized (logSync) {
-						System.out.print(
-								"[" +
-										"#".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
-										+ "] (" + d + " / " + urls.size() + " - " + percentage + "%)       \r"
-						);
+		Path bitmapLocation = outputDirectory.resolve("bitmap.bin");
+
+		if (hdtSource != null) {
+			BitmapAccess bitmap = null;
+			try {
+				try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad)) {
+					long count = sourceHDT.getTriples().getNumberOfElements();
+					// if bitmap.size > 500MB, using disk bitmap
+					if (count > 4_000_000_000L) {
+						bitmap = BitmapAccess.disk(count, bitmapLocation);
+					} else {
+						bitmap = BitmapAccess.memory(count, bitmapLocation);
 					}
-					return path;
-				}))
-				.toList();
+					System.out.println("Compute bitmap...");
+					fetcher.computeBitmap(sourceHDT, subjects, bitmap);
+				}
+				bitmap.save();
+				System.out.println("bitmap saved to " + bitmapLocation);
 
-		try {
-			for (Future<Path> f : futures) {
-				f.get();
+
+				System.out.println("create diff");
+				Path diffLocation = outputDirectory.resolve("diff.hdt");
+				Path diffWork = diffLocation.resolveSibling("diff_work");
+				Files.createDirectories(diffWork);
+				try (HDT hdtDiff = HDTManager.diffHDTBit(
+						diffWork.toAbsolutePath().toString(),
+						hdtLocation.toAbsolutePath().toString(),
+						bitmap,
+						new HDTSpecification(),
+						null
+				)) {
+					hdtDiff.saveToHDT(diffLocation.toAbsolutePath().toString(), null);
+					System.out.println("diff created to " + diffLocation);
+				} finally {
+					PathUtils.deleteDirectory(diffWork);
+				}
+				System.out.println("create cat from diff/cache");
+				Path resultHDTLocation = outputDirectory.resolve("result.hdt");
+				Path catWork = diffLocation.resolveSibling("cat_work");
+				Files.createDirectories(catWork);
+				try (HDT hdtCat = HDTManager.catHDT(
+						catWork.toAbsolutePath().toString(),
+						diffLocation.toAbsolutePath().toString(),
+						hdtLocation.toAbsolutePath().toString(),
+						new HDTSpecification(),
+						null
+				)) {
+					hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
+					System.out.println("cat created to " + resultHDTLocation);
+
+					System.out.println("done.");
+				} finally {
+					PathUtils.deleteDirectory(catWork);
+				}
+				Files.delete(diffLocation);
+				Files.delete(hdtLocation);
+			} finally {
+				if (bitmap != null) {
+					bitmap.close();
+				}
 			}
-		} catch (ExecutionException e) {
-			pool.shutdownNow();
-			throw e;
+		} else {
+			System.out.println("HDT Source not specified, no bitmap/merge hdt built, use --" + hdtSourceOpt.getLongOpt() + " (hdt) to add a source");
 		}
-
-		System.out.println();
-
-		pool.shutdown();
-
-		System.out.println("done.");
 	}
+
+	private static HDT loadOrMap(Path file, boolean load) throws IOException {
+		if (load) {
+			return HDTManager.loadHDT(file.toAbsolutePath().toString());
+		} else {
+			return HDTManager.mapHDT(file.toAbsolutePath().toString());
+		}
+	}
+
+	public static final String FETCHER_DELETED_ENTITY = "http://the-qa-company.com/wikiChangeFetcher/DeletedEntity";
 
 	private final ObjectMapper mapper = new ObjectMapper();
 	@Getter
 	private final FetcherOptions options;
 
-	private void downloadPageToFile(URL uri, Path output) throws IOException {
-		try {
-			IOUtils.copy(uri, output.toFile());
-		} catch (java.io.FileNotFoundException e) {
-			// ignore
+	private boolean downloadPageToFile(URL url, Path output, Map<String, String> headers, int maxTry, long sleepBetweenTry) throws IOException, InterruptedException {
+		IOException lastException = null;
+		if (maxTry <= 0) {
+			maxTry = Integer.MAX_VALUE;
 		}
+		for (int i = 0; i < maxTry; i++) {
+			try {
+				if (!(url.openConnection() instanceof HttpURLConnection conn)) {
+					throw new IllegalArgumentException("the url " + url + " isn't an http url");
+				}
+				headers.forEach(conn::setRequestProperty);
+
+				try (InputStream is = new GZIPInputStream(conn.getInputStream());
+					 OutputStream os = Files.newOutputStream(output)) {
+					IOUtils.copy(is, os);
+					// we have the file, we can leave
+					return true;
+				}
+			} catch (java.io.FileNotFoundException e) {
+				// no file, we can leave
+				return false;
+			} catch (IOException e) {
+				if (lastException == null) {
+					lastException = e;
+				} else {
+					lastException.addSuppressed(e);
+				}
+				if (sleepBetweenTry > 0) {
+					try {
+						Thread.sleep(sleepBetweenTry);
+					} catch (InterruptedException ie) {
+						ie.addSuppressed(lastException);
+						throw ie;
+					}
+				}
+			}
+		}
+		// too many try
+		throw lastException;
 	}
 
 	/**
@@ -164,7 +378,7 @@ public class WikidataChangesFetcher {
 	/**
 	 * call the wikidata changes api
 	 *
-	 * @param rcchange the rcchange id for restart
+	 * @param rcchange       the rcchange id for restart
 	 * @param elementPerRead number of elements to query to the wiki api
 	 * @return result
 	 * @throws IOException api call fail
@@ -205,5 +419,95 @@ public class WikidataChangesFetcher {
 		}
 
 		return it;
+	}
+
+	/**
+	 * create an HDT from a directory containing RDF file
+	 *
+	 * @param cachePath the directory
+	 * @return hdt
+	 * @throws IOException io error
+	 */
+	public HDT createHDTOfCache(Path cachePath, String baseURI) throws IOException {
+		HDTOptions opts = new HDTSpecification();
+		try {
+			return HDTManager.generateHDT(
+					cachePath.toAbsolutePath().toString(),
+					baseURI,
+					RDFNotation.DIR,
+					opts,
+					null
+			);
+		} catch (ParserException e) {
+			throw new IOException("Can't parse HDT", e);
+		}
+	}
+
+	/**
+	 * create an HDT from a directory and save it into a file
+	 *
+	 * @param cachePath   the directory
+	 * @param hdtPath     hdt path to save it
+	 * @param deleteCache if we need to delete the directory
+	 * @throws IOException io error
+	 */
+	public void createHDTOfCache(Path cachePath, String baseURI, Path hdtPath, boolean deleteCache) throws IOException {
+		try (HDT hdt = createHDTOfCache(cachePath, baseURI);
+			 OutputStream os = new BufferedOutputStream(Files.newOutputStream(hdtPath))) {
+			hdt.saveToHDT(os, null);
+		} finally {
+			if (deleteCache) {
+				PathUtils.deleteDirectory(cachePath);
+			}
+		}
+	}
+
+	public void computeBitmap(HDT source, Set<String> subjects, BitmapAccess bitmap) {
+		try {
+			for (String subject : subjects) {
+				IteratorTripleString it = source.search(subject, "", "");
+				while (it.hasNext()) {
+					it.next();
+					bitmap.set(it.getLastTriplePosition(), true);
+				}
+			}
+		} catch (NotFoundException e) {
+			// shouldn't happen with HDTs?
+		}
+	}
+
+	public Set<String> fetchSubjectOfCache(String baseURI, Path cache) throws IOException {
+		Set<String> subjects = new HashSet<>();
+		Files.walkFileTree(cache, new FileVisitor<>() {
+			@Override
+			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+				String filename = file.getFileName().toString();
+
+				int dotIndex = filename.indexOf(".");
+				if (dotIndex != -1) {
+					String iri = baseURI + filename.substring(0, dotIndex);
+					subjects.add(iri);
+					System.out.print("found subject " + iri + "         \r");
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult visitFileFailed(Path file, IOException exc) {
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
+				return FileVisitResult.CONTINUE;
+			}
+		});
+		return subjects;
 	}
 }
