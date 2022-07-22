@@ -4,7 +4,7 @@ plugins {
 }
 
 group 'com.the-qa-company'
-version '0.1-SNAPSHOT'
+version '0.1.0-SNAPSHOT'
 
 repositories {
     mavenCentral()
@@ -38,4 +38,10 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+tasks.register("printVersion") {
+    doLast {
+        println(rootProject.version)
+    }
 }

@@ -1,0 +1,68 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_made:
+        description: "I have update the release/RELEASE.md file to describe the release."
+        required: true
+        type: boolean
+
+jobs:
+  check_release:
+    name: Check input parameters
+    if: ${{ !inputs.release_made }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Release check wasn't checked"
+  build:
+    name: 🏗️ Building project
+    if: ${{ inputs.release_made }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version_get.outputs.version }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: 🗝️ update permissions
+        run: chmod u+x gradlew
+      - name: ⚙️ get version
+        id: version_get
+        run: echo "::set-output name=version::$(scripts/get_version.sh)"
+      - name: ⚙️ Set up JDK
+        uses: actions/setup-java@v1
+        with:
+          java-version: 17
+      - name: 🏗️ Compile wiki-changes
+        run: ./gradlew shadowJar
+      - name: ⚙️ Move compiled jar
+        run: mv ./build/libs/wikidata-changes-*-all.jar wiki-changes.jar
+      - name: ☁️ Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: "wiki-changes.jar"
+          path: "wiki-changes.jar"
+  create_release:
+    name: 🚀 Create Github release
+    environment:
+      name: release
+      url: "https://github.com/the-qa-company/wiki-changes/releases/tag/v${{ needs.build.outputs.version }}"
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: ☁️ Download artifacts
+        uses: actions/download-artifact@v3
+      - name: ⚙️ Extract artifacts
+        run: |
+          mkdir -p deploy_file
+          mv wiki-changes.jar/* deploy_file
+      - name: 🚀 Create release with artifacts
+        uses: ncipollo/release-action@v1
+        with:
+          commit: ${{ github.sha }}
+          tag: "v${{ needs.build.outputs.version }}"
+          artifacts: "deploy_file/*"
+          name: "Release ${{ needs.build.outputs.version }}"
+          bodyFile: "release/RELEASE.md"
+          token: ${{ secrets.GITHUB_TOKEN }}
