@@ -9,13 +9,19 @@ Tool to extract diff from a wikibase instance
 
 ## Install
 
-You can create the jar with this command
+You can download the latest version in the [release section](https://github.com/the-qa-company/wiki-changes/releases).
+
+
+You can also clone and compile the jar by yourself with these commands
+
 ```bash
+git clone https://github.com/the-qa-company/wiki-changes.git
+cd wiki-changes
 ./gradlew shadowJar
 mv ./build/libs/wikidata-changes-*-all.jar wiki-changes.jar
 ```
 
-then run it with
+## Usage
 
 ```bash
 java -Xmx4g -jar ./wiki-changes.jar --date UTC_DATE_TOSEARCH --hdtsource YOUR_PREVIOUS_DUMP
