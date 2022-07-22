@@ -152,15 +152,10 @@ public class WikidataChangesFetcher {
 			System.out.print("\r");
 			long i = 0;
 			for (Change change : changes) {
+				long d = ++i;
 				if (!change.getTitle().isEmpty() && change.getNs() == 0) {
 					urls.add(change);
-					long d = ++i;
-					int percentage = (int) (100L * d / changes.size());
-					System.out.print(
-							"[" +
-									"#".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
-									+ "] found: " + urls.size() + " (" + d + " / " + changes.size() + " - " + percentage + "%)       \r"
-					);
+					printPercentage(d, changes.size(), "fetch: " + urls.size(), true);
 				}
 			}
 
@@ -181,7 +176,6 @@ public class WikidataChangesFetcher {
 			List<? extends Future<Path>> futures = urls.stream()
 					.map(change -> pool.submit(() -> {
 						Path path = sites.resolve(change.getTitle() + ".ttl");
-						String e = "http://www.wikidata.org/entity/" + change.getTitle();
 						if (!fetcher.downloadPageToFile(
 								new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl?flavor=simple"),
 								path,
@@ -200,14 +194,8 @@ public class WikidataChangesFetcher {
 							Files.writeString(path, "");
 						}
 						long d = downloads.incrementAndGet();
-						int percentage = (int) (100L * d / urls.size());
-
 						synchronized (logSync) {
-							System.out.print(
-									"[" +
-											"#".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
-											+ "] (" + d + " / " + urls.size() + " - " + percentage + "%)       \r"
-							);
+							printPercentage(d, urls.size(), "downloading", true);
 						}
 						return path;
 					}))
@@ -324,7 +312,24 @@ public class WikidataChangesFetcher {
 		}
 	}
 
-	public static final String FETCHER_DELETED_ENTITY = "http://the-qa-company.com/wikiChangeFetcher/DeletedEntity";
+	private static void printPercentage(long value, long maxValue, String message, boolean showValues) {
+		int percentage = (int) (100L * value / maxValue);
+		if (showValues) {
+			System.out.print(
+					"[" +
+							"\u25A0".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
+							+ "] " + message
+							+ " (" + value + " / " + maxValue + " - " + percentage + "%)       \r"
+			);
+		} else {
+			System.out.print(
+					"[" +
+							"\u25A0".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
+							+ "] " + message
+							+ " (" + percentage + "%)       \r"
+			);
+		}
+	}
 
 	private final ObjectMapper mapper = new ObjectMapper();
 	@Getter
@@ -404,6 +409,13 @@ public class WikidataChangesFetcher {
 		Iterable<Change> it = EmptyIterable.empty();
 		long count = 0;
 
+		long now = Date.from(Instant.now()).getTime();
+		long deltaTime = (now - end.getTime());
+
+		if (deltaTime <= 0) {
+			throw new IllegalArgumentException("future time");
+		}
+
 		String lastRc = null;
 		while (true) {
 			// fetch changes
@@ -418,7 +430,8 @@ public class WikidataChangesFetcher {
 
 			// end date
 			if (log) {
-				System.out.print("rollback to " + date + " " + count + " elements.   \r");
+				long current = Math.max(0, Math.min(deltaTime, deltaTime - (date.getTime() - end.getTime())));
+				printPercentage(current, deltaTime, "rollback to " + date + " " + count + " elements.", false);
 			}
 			if (date.before(end)) {
 				break;
