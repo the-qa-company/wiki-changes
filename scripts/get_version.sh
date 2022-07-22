@@ -4,4 +4,6 @@ BASE=`dirname $0`
 
 cd $BASE/..
 
-./gradlew printVersion -q
+VERSION="$(./gradlew printVersion -q)"
+
+echo $VERSION

@@ -23,15 +23,19 @@ jobs:
       version: ${{ steps.version_get.outputs.version }}
     steps:
       - uses: actions/checkout@v2
-      - name: 🗝️ update permissions
-        run: chmod u+x gradlew
-      - name: ⚙️ get version
-        id: version_get
-        run: echo "::set-output name=version::$(scripts/get_version.sh)"
       - name: ⚙️ Set up JDK
         uses: actions/setup-java@v1
         with:
           java-version: 17
+      - name: 🗝️ Update permissions
+        run: chmod u+x gradlew
+      - name: 🌍 Fetch dependencies
+        run: ./gradlew --refresh-dependencies
+      - name: ⚙️ Get version
+        id: version_get
+        run: echo "::set-output name=version::$(scripts/get_version.sh)"
+      - name: ⚙️ Print version
+        run: 'echo "version: ${{ steps.version_get.outputs.version }}"'
       - name: 🏗️ Compile wiki-changes
         run: ./gradlew shadowJar
       - name: ⚙️ Move compiled jar
