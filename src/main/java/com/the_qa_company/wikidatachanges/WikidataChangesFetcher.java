@@ -145,15 +145,22 @@ public class WikidataChangesFetcher {
 
 			System.out.print("fetching changes...\r");
 
-			Iterable<Change> changes = fetcher.getChanges(date, elementPerRead, true);
+			ChangesIterable<Change> changes = fetcher.getChanges(date, elementPerRead, true);
 
 			System.out.println();
 
-			System.out.print("fetching changes: 0\r");
+			System.out.print("\r");
+			long i = 0;
 			for (Change change : changes) {
 				if (!change.getTitle().isEmpty() && change.getNs() == 0) {
 					urls.add(change);
-					System.out.print("fetching changes: " + urls.size() + "\r");
+					long d = ++i;
+					int percentage = (int) (100L * d / changes.size());
+					System.out.print(
+							"[" +
+									"#".repeat(percentage * 20 / 100) + " ".repeat(20 - percentage * 20 / 100)
+									+ "] found: " + urls.size() + " (" + d + " / " + changes.size() + " - " + percentage + "%)       \r"
+					);
 				}
 			}
 
@@ -393,7 +400,7 @@ public class WikidataChangesFetcher {
 		return mapper.readValue(url, ApiResult.class);
 	}
 
-	public Iterable<Change> getChanges(Date end, long elementPerRead, boolean log) throws IOException {
+	public ChangesIterable<Change> getChanges(Date end, long elementPerRead, boolean log) throws IOException {
 		Iterable<Change> it = EmptyIterable.empty();
 		long count = 0;
 
@@ -418,7 +425,7 @@ public class WikidataChangesFetcher {
 			}
 		}
 
-		return it;
+		return new ChangesIterable<>(it, count);
 	}
 
 	/**
