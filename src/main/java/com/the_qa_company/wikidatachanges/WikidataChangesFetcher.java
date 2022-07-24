@@ -4,8 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.the_qa_company.wikidatachanges.api.ApiResult;
 import com.the_qa_company.wikidatachanges.api.Change;
 import com.the_qa_company.wikidatachanges.utils.BitmapAccess;
-import com.the_qa_company.wikidatachanges.utils.EmptyIterable;
-import com.the_qa_company.wikidatachanges.utils.MergeIterable;
+import com.the_qa_company.wikidatachanges.utils.HDTUtils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.cli.CommandLine;
@@ -19,14 +18,12 @@ import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
 import org.rdfhdt.hdt.enums.RDFNotation;
 import org.rdfhdt.hdt.exceptions.NotFoundException;
-import org.rdfhdt.hdt.exceptions.ParserException;
 import org.rdfhdt.hdt.hdt.HDT;
 import org.rdfhdt.hdt.hdt.HDTManager;
 import org.rdfhdt.hdt.options.HDTOptions;
 import org.rdfhdt.hdt.options.HDTSpecification;
 import org.rdfhdt.hdt.triples.IteratorTripleString;
 
-import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -38,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -406,7 +404,7 @@ public class WikidataChangesFetcher {
 	}
 
 	public ChangesIterable<Change> getChanges(Date end, long elementPerRead, boolean log) throws IOException {
-		Iterable<Change> it = EmptyIterable.empty();
+		List<Change> arr = new ArrayList<>();
 		long count = 0;
 
 		long now = Date.from(Instant.now()).getTime();
@@ -423,7 +421,7 @@ public class WikidataChangesFetcher {
 			// add result to the iterable
 			List<Change> recentchanges = apiResult.getQuery().getRecentchanges();
 			count += recentchanges.size();
-			it = MergeIterable.merge(it, recentchanges);
+			arr.addAll(recentchanges);
 
 			lastRc = apiResult.getContinueOpt().getRccontinue();
 			Date date = apiResult.getContinueOpt().getRcContinueDate();
@@ -438,7 +436,7 @@ public class WikidataChangesFetcher {
 			}
 		}
 
-		return new ChangesIterable<>(it, count);
+		return new ChangesIterable<>(arr, count);
 	}
 
 	/**
@@ -448,19 +446,8 @@ public class WikidataChangesFetcher {
 	 * @return hdt
 	 * @throws IOException io error
 	 */
-	public HDT createHDTOfCache(Path cachePath, String baseURI) throws IOException {
-		HDTOptions opts = new HDTSpecification();
-		try {
-			return HDTManager.generateHDT(
-					cachePath.toAbsolutePath().toString(),
-					baseURI,
-					RDFNotation.DIR,
-					opts,
-					null
-			);
-		} catch (ParserException e) {
-			throw new IOException("Can't parse HDT", e);
-		}
+	public HDT createHDTOfCache(Path cachePath, Path output, String baseURI) throws IOException {
+		return HDTManager.mapHDT(output.toAbsolutePath().toString());
 	}
 
 	/**
@@ -472,13 +459,11 @@ public class WikidataChangesFetcher {
 	 * @throws IOException io error
 	 */
 	public void createHDTOfCache(Path cachePath, String baseURI, Path hdtPath, boolean deleteCache) throws IOException {
-		try (HDT hdt = createHDTOfCache(cachePath, baseURI);
-			 OutputStream os = new BufferedOutputStream(Files.newOutputStream(hdtPath))) {
-			hdt.saveToHDT(os, null);
-		} finally {
-			if (deleteCache) {
-				PathUtils.deleteDirectory(cachePath);
-			}
+		HDTOptions opts = new HDTSpecification();
+		HDTUtils.compressToHdt(RDFNotation.DIR, baseURI, cachePath.toAbsolutePath().toString(),
+				hdtPath.toAbsolutePath().toString(), opts);
+		if (deleteCache) {
+			PathUtils.deleteDirectory(cachePath);
 		}
 	}
 
