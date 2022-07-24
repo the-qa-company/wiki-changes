@@ -1,3 +1,4 @@
 **Changelog 📓**
 
-- Release wiki-changes.jar
+- better HDT read for low-spec memory
+- better fetch speed
