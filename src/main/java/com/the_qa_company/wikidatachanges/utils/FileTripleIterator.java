@@ -1,6 +1,7 @@
 package com.the_qa_company.wikidatachanges.utils;
 
 import org.rdfhdt.hdt.triples.TripleString;
+import org.rdfhdt.hdt.util.UnicodeEscape;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
@@ -19,11 +20,7 @@ public class FileTripleIterator implements Iterator<TripleString> {
 	private static final Charset DEFAULT_CHARSET = Charset.defaultCharset();
 
 	static long estimateTripleSize(TripleString triple) {
-		try {
-			return triple.asNtriple().toString().getBytes(DEFAULT_CHARSET).length;
-		} catch (IOException e) {
-			throw new RuntimeException("Can't estimate the size of the triple " + triple, e);
-		}
+		return (triple.getSubject().toString() + triple.getObject().toString() + triple.getPredicate()).getBytes(DEFAULT_CHARSET).length;
 	}
 
 	private final Iterator<TripleString> it;

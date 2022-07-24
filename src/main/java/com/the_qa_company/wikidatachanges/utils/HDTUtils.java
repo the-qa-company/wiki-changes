@@ -11,10 +11,11 @@ import org.rdfhdt.hdt.rdf.RDFParserFactory;
 import org.rdfhdt.hdt.triples.TripleString;
 import org.rdfhdt.hdt.util.StopWatch;
 
-import java.io.File;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.Iterator;
 
 @UtilityClass
@@ -31,17 +32,16 @@ public class HDTUtils {
 		System.out.println("Maximal available memory " + presFreeMemory);
 		return presFreeMemory;
 	}
-	public static void compressToHdt(RDFNotation notation, String baseURI, String filename, String hdtLocation,
+	public static void compressToHdt(RDFNotation notation, String baseURI, String filename, Path hdtLocation,
 									 HDTOptions specs) throws IOException {
 		long chunkSize = getMaxChunkSize();
 
-		File hdtParentFile = new File(hdtLocation).getParentFile();
-		String hdtParent = hdtParentFile.getAbsolutePath();
-		Files.createDirectories(hdtParentFile.toPath());
+		Path hdtParentFile = hdtLocation.getParent().toAbsolutePath();
+		Files.createDirectories(hdtParentFile);
 
 		StopWatch timeWatch = new StopWatch();
 
-		File tempFile = new File(hdtParentFile, filename);
+		Path tempFile = hdtParentFile.resolve(filename);
 		// the compression will not fit in memory, cat the files in chunks and
 		// use hdtCat
 
@@ -54,11 +54,10 @@ public class HDTUtils {
 		FileTripleIterator it = new FileTripleIterator(tripleIterator, chunkSize);
 
 		int file = 0;
-		String lastFile = null;
+		Path lastFile = null;
 		while (it.hasNewFile()) {
 			System.out.println("Compressing #" + file);
-			String hdtOutput = new File(tempFile.getParent(),
-					tempFile.getName() + "." + String.format("%03d", file) + ".hdt").getAbsolutePath();
+			Path hdtOutput  = hdtParentFile.resolve(tempFile.getFileName() + "." + String.format("%03d", file) + ".hdt");
 
 			generateHDT(it, baseURI, specs, hdtOutput);
 
@@ -67,23 +66,33 @@ public class HDTUtils {
 			if (file > 0) {
 				// not the first file, so we have at least 2 files
 				System.out.println("Cat " + hdtOutput);
-				String nextIndex = hdtParent + "/index_cat_tmp_" + file + ".hdt";
-				HDT tmp = HDTManager.catHDT(nextIndex, lastFile, hdtOutput, specs, null);
+				Path nextIndex = hdtParentFile.resolve("index_cat_tmp_" + file + ".hdt");
+				try (HDT tmp = HDTManager.catHDT(
+						nextIndex.toAbsolutePath().toString(),
+						lastFile.toAbsolutePath().toString(),
+						hdtOutput.toAbsolutePath().toString(),
+						specs,
+						HDTUtils::listener)) {
+					System.out.println();
 
-				System.out.println(
-						"saving hdt with " + tmp.getTriples().getNumberOfElements() + " triple(s) into " + nextIndex);
-				tmp.saveToHDT(nextIndex, null);
-				tmp.close();
+					System.out.println(
+							"saving hdt with " + tmp.getTriples().getNumberOfElements() + " triple(s) into " + nextIndex);
+					tmp.saveToHDT(
+							nextIndex.toAbsolutePath().toString(),
+							HDTUtils::listener
+					);
+					System.out.println();
+				}
 				System.gc();
 
-				Files.delete(Paths.get(hdtOutput));
+				Files.delete(hdtOutput);
 				if (file > 1) {
 					// at least the 2nd
-					Files.delete(Paths.get(hdtParent, "/index_cat_tmp_" + (file - 1) + ".hdt"));
-					Files.delete(Paths.get(hdtParent, "/index_cat_tmp_" + (file - 1) + ".hdtdictionary"));
-					Files.delete(Paths.get(hdtParent, "/index_cat_tmp_" + (file - 1) + ".hdttriples"));
+					Files.delete(hdtParentFile.resolve("index_cat_tmp_" + (file - 1) + ".hdt"));
+					Files.delete(hdtParentFile.resolve("index_cat_tmp_" + (file - 1) + ".hdtdictionary"));
+					Files.delete(hdtParentFile.resolve("index_cat_tmp_" + (file - 1) + ".hdttriples"));
 				} else {
-					Files.delete(Paths.get(lastFile));
+					Files.delete(lastFile);
 				}
 				lastFile = nextIndex;
 			} else {
@@ -92,22 +101,31 @@ public class HDTUtils {
 			file++;
 		}
 		assert lastFile != null : "Last file can't be null";
-		Files.move(Paths.get(lastFile), Paths.get(hdtLocation));
+		Files.move(lastFile, hdtLocation);
 		if (file != 1) {
-			Files.delete(Paths.get(hdtParent, "/index_cat_tmp_" + (file - 1) + ".hdtdictionary"));
-			Files.delete(Paths.get(hdtParent, "/index_cat_tmp_" + (file - 1) + ".hdttriples"));
+			Files.delete(hdtParentFile.resolve("index_cat_tmp_" + (file - 1) + ".hdtdictionary"));
+			Files.delete(hdtParentFile.resolve("index_cat_tmp_" + (file - 1) + ".hdttriples"));
 		}
 		System.out.println("NT file loaded in " + timeWatch.stopAndShow());
 	}
 
-	private void generateHDT(Iterator<TripleString> it, String baseURI, HDTOptions spec, String hdtOutput)
+	private static void generateHDT(Iterator<TripleString> it, String baseURI, HDTOptions spec, Path hdtOutput)
 			throws IOException {
 			// directly use the TripleString stream to generate the HDT
-		try (HDT hdtDump = HDTManager.generateHDT(it, baseURI, spec, null)) {
-			hdtDump.saveToHDT(hdtOutput, null);
+		try (HDT hdtDump = HDTManager.generateHDT(it, baseURI, spec, HDTUtils::listener);
+			 OutputStream out = new BufferedOutputStream(Files.newOutputStream(hdtOutput))) {
+			hdtDump.saveToHDT(out, HDTUtils::listener);
 		} catch (ParserException e) {
 			throw new IOException("Can't generate HDT", e);
+		} finally {
+			System.out.println();
 		}
 	}
 
+	private static String last = "";
+	private static void listener(float progress, String message) {
+		String print = message + "(" + (int) (progress) + "%)";
+		System.out.print(print + " ".repeat(Math.max(0, last.length() - print.length())) + "\r");
+		last = print;
+	}
 }

@@ -460,8 +460,7 @@ public class WikidataChangesFetcher {
 	 */
 	public void createHDTOfCache(Path cachePath, String baseURI, Path hdtPath, boolean deleteCache) throws IOException {
 		HDTOptions opts = new HDTSpecification();
-		HDTUtils.compressToHdt(RDFNotation.DIR, baseURI, cachePath.toAbsolutePath().toString(),
-				hdtPath.toAbsolutePath().toString(), opts);
+		HDTUtils.compressToHdt(RDFNotation.DIR, baseURI, cachePath.toAbsolutePath().toString(), hdtPath, opts);
 		if (deleteCache) {
 			PathUtils.deleteDirectory(cachePath);
 		}
