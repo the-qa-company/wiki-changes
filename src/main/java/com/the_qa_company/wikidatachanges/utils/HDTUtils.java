@@ -123,7 +123,7 @@ public class HDTUtils {
 	}
 
 	private static String last = "";
-	private static void listener(float progress, String message) {
+	public static void listener(float progress, String message) {
 		String print = message + "(" + (int) (progress) + "%)";
 		System.out.print(print + " ".repeat(Math.max(0, last.length() - print.length())) + "\r");
 		last = print;

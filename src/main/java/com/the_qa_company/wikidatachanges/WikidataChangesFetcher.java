@@ -7,7 +7,13 @@ import com.the_qa_company.wikidatachanges.utils.BitmapAccess;
 import com.the_qa_company.wikidatachanges.utils.HDTUtils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import org.apache.commons.cli.*;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
 import org.rdfhdt.hdt.dictionary.Dictionary;
@@ -32,7 +38,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -258,11 +270,12 @@ public class WikidataChangesFetcher {
 				Files.createDirectories(diffWork);
 				try (HDT hdtDiff = HDTManager.diffHDTBit(
 						diffWork.toAbsolutePath().toString(),
-						hdtLocation.toAbsolutePath().toString(),
+						hdtSource.toAbsolutePath().toString(),
 						bitmap,
 						new HDTSpecification(),
-						null
+						HDTUtils::listener
 				)) {
+					System.out.println();
 					hdtDiff.saveToHDT(diffLocation.toAbsolutePath().toString(), null);
 					System.out.println("diff created to " + diffLocation);
 				} finally {
@@ -277,8 +290,9 @@ public class WikidataChangesFetcher {
 						diffLocation.toAbsolutePath().toString(),
 						hdtLocation.toAbsolutePath().toString(),
 						new HDTSpecification(),
-						null
+						HDTUtils::listener
 				)) {
+					System.out.println();
 					hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
 					System.out.println("cat created to " + resultHDTLocation);
 
@@ -286,8 +300,8 @@ public class WikidataChangesFetcher {
 				} finally {
 					PathUtils.deleteDirectory(catWork);
 				}
-				Files.delete(diffLocation);
-				Files.delete(hdtLocation);
+				// Files.delete(diffLocation);
+				// Files.delete(hdtLocation);
 			} finally {
 				if (bitmap != null) {
 					bitmap.close();
@@ -456,6 +470,7 @@ public class WikidataChangesFetcher {
 		DictionarySection subjectsSection = sites.getDictionary().getSubjects();
 		Dictionary sourceDict = source.getDictionary();
 		long subjects = subjectsSection.getNumberOfElements();
+		long deleteStatements = 0;
 
 		for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext();) {
 			CharSequence subject = its.next();
@@ -464,10 +479,11 @@ public class WikidataChangesFetcher {
 			while (it.hasNext()) {
 				it.next();
 				bitmap.set(it.getLastTriplePosition(), true);
+				deleteStatements++;
 			}
-			printPercentage(++n, subjects, "compute delta bitmap", true);
+			printPercentage(++n, subjects, "compute delete bitmap " + deleteStatements + " statement(s) to delete", true);
 		}
-		printPercentage(subjects, subjects, "compute delta bitmap", true);
+		printPercentage(subjects, subjects, "compute delete bitmap " + deleteStatements + " statement(s) to delete", true);
 		System.out.println();
 	}
 
