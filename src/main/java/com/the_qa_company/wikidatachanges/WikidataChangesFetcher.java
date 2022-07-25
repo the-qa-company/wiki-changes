@@ -16,6 +16,7 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
+import org.rdfhdt.hdt.dictionary.DictionarySection;
 import org.rdfhdt.hdt.enums.RDFNotation;
 import org.rdfhdt.hdt.exceptions.NotFoundException;
 import org.rdfhdt.hdt.hdt.HDT;
@@ -35,12 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -215,11 +211,6 @@ public class WikidataChangesFetcher {
 			pool.shutdown();
 		}
 
-		Set<String> subjects = fetcher.fetchSubjectOfCache("http://www.wikidata.org/entity/", sites);
-
-		System.out.println();
-		System.out.println("Read " + subjects.size() + " subject(s).");
-
 		System.out.println("Creating HDT from cache");
 
 		Path hdtLocation = outputDirectory.resolve("sites.hdt");
@@ -231,6 +222,10 @@ public class WikidataChangesFetcher {
 				throw new IOException("Using --" + noHdtRecomputeOpt.getLongOpt() + " -" + noHdtRecomputeOpt.getOpt() + " without the hdt " + hdtLocation);
 			}
 		} else {
+			Set<String> subjects = fetcher.fetchSubjectOfCache("http://www.wikidata.org/entity/", sites);
+
+			System.out.println();
+			System.out.println("Read " + subjects.size() + " subject(s).");
 			fetcher.createHDTOfCache(sites, "http://www.wikidata.org/entity/", hdtLocation, clearCache);
 			System.out.println("cache converted into: " + hdtLocation);
 		}
@@ -241,16 +236,17 @@ public class WikidataChangesFetcher {
 		if (hdtSource != null) {
 			BitmapAccess bitmap = null;
 			try {
-				try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad)) {
-					long count = sourceHDT.getTriples().getNumberOfElements();
+				try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad);
+						HDT sitesHDT = loadOrMap(hdtLocation, hdtLoad)) {
+					long count = sourceHDT.getTriples().getNumberOfElements() + 2;
+					System.out.println("build bitmap of size: " + count);
 					// if bitmap.size > 500MB, using disk bitmap
 					if (count > 4_000_000_000L) {
 						bitmap = BitmapAccess.disk(count, bitmapLocation);
 					} else {
 						bitmap = BitmapAccess.memory(count, bitmapLocation);
 					}
-					System.out.println("Compute bitmap...");
-					fetcher.computeBitmap(sourceHDT, subjects, bitmap);
+					fetcher.computeBitmap(sourceHDT, sitesHDT, bitmap);
 				}
 				bitmap.save();
 				System.out.println("bitmap saved to " + bitmapLocation);
@@ -440,17 +436,6 @@ public class WikidataChangesFetcher {
 	}
 
 	/**
-	 * create an HDT from a directory containing RDF file
-	 *
-	 * @param cachePath the directory
-	 * @return hdt
-	 * @throws IOException io error
-	 */
-	public HDT createHDTOfCache(Path cachePath, Path output, String baseURI) throws IOException {
-		return HDTManager.mapHDT(output.toAbsolutePath().toString());
-	}
-
-	/**
 	 * create an HDT from a directory and save it into a file
 	 *
 	 * @param cachePath   the directory
@@ -466,15 +451,23 @@ public class WikidataChangesFetcher {
 		}
 	}
 
-	public void computeBitmap(HDT source, Set<String> subjects, BitmapAccess bitmap) {
+	public void computeBitmap(HDT source, HDT sites, BitmapAccess bitmap) {
 		try {
-			for (String subject : subjects) {
+			int n = 0;
+			DictionarySection subjectsSection = sites.getDictionary().getSubjects();
+			long subjects = subjectsSection.getNumberOfElements();
+
+			for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext();) {
+				CharSequence subject = its.next();
 				IteratorTripleString it = source.search(subject, "", "");
 				while (it.hasNext()) {
 					it.next();
 					bitmap.set(it.getLastTriplePosition(), true);
 				}
+				printPercentage(++n, subjects, "compute delta bitmap", true);
 			}
+			printPercentage(subjects, subjects, "compute delta bitmap", true);
+			System.out.println();
 		} catch (NotFoundException e) {
 			// shouldn't happen with HDTs?
 		}
