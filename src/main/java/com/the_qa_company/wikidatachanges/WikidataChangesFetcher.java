@@ -55,6 +55,7 @@ public class WikidataChangesFetcher {
 		Option noHdtRecomputeOpt = new Option("H", "nonewhdt", false, "Don't recompute the HDT");
 		Option hdtLoadOpt = new Option("l", "hdtload", false, "Load the HDT into memory, fast up the process");
 		Option hdtSourceOpt = new Option("s", "hdtsource", true, "Hdt source location (required to compute bitmaps and merge hdt)");
+		Option mapBitMapOpt = new Option("B", "mapbitmap", false, "map the bitmap into disk, reduce the memory using and the speed");
 		Option helpOpt = new Option("h", "help", false, "Print help");
 
 		Options opt = new Options()
@@ -66,6 +67,7 @@ public class WikidataChangesFetcher {
 				.addOption(clearCacheOpt)
 				.addOption(noCacheRecomputeOpt)
 				.addOption(maxTryOpt)
+				.addOption(mapBitMapOpt)
 				.addOption(sleepBetweenTryOpt)
 				.addOption(noHdtRecomputeOpt)
 				.addOption(hdtLoadOpt)
@@ -100,6 +102,8 @@ public class WikidataChangesFetcher {
 		int maxTry = Integer.parseInt(cl.getOptionValue(maxTryOpt, "5"));
 		long sleepBetweenTry = Long.parseLong(cl.getOptionValue(sleepBetweenTryOpt, "5000"));
 		boolean hdtLoad = cl.hasOption(hdtLoadOpt);
+		boolean mapBitmap = cl.hasOption(mapBitMapOpt);
+
 		Path hdtSource;
 		if (cl.hasOption(hdtSourceOpt)) {
 			hdtSource = Path.of(cl.getOptionValue(hdtSourceOpt));
@@ -236,8 +240,7 @@ public class WikidataChangesFetcher {
 						HDT sitesHDT = loadOrMap(hdtLocation, hdtLoad)) {
 					long count = sourceHDT.getTriples().getNumberOfElements() + 2;
 					System.out.println("build bitmap of size: " + count);
-					// if bitmap.size > 500MB, using disk bitmap
-					if (count > 4_000_000_000L) {
+					if (mapBitmap) {
 						bitmap = BitmapAccess.disk(count, bitmapLocation);
 					} else {
 						bitmap = BitmapAccess.memory(count, bitmapLocation);
