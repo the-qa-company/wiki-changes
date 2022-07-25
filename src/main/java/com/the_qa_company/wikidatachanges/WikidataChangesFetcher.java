@@ -93,6 +93,9 @@ public class WikidataChangesFetcher {
 		}
 		Path outputDirectory = Path.of(cl.getOptionValue(cacheOpt, "cache"));
 		Path sites = outputDirectory.resolve("sites");
+		if (!Files.exists(outputDirectory)) {
+			Files.createDirectories(outputDirectory);
+		}
 		int elementPerRead = Integer.parseInt(cl.getOptionValue(elementsOpt, "500"));
 		String wikiapi = cl.getOptionValue(wikiapiOpt, "https://www.wikidata.org/w/api.php");
 		Date date = Date.from(Instant.parse(cl.getOptionValue(dateOpt)));
@@ -128,13 +131,7 @@ public class WikidataChangesFetcher {
 				.url(wikiapi)
 				.build());
 
-		if (noCacheRecompute) {
-			if (Files.exists(sites)) {
-				System.out.println("Using cache " + sites);
-			} else {
-				throw new IOException("Using --" + noCacheRecomputeOpt.getLongOpt() + " -" + noCacheRecomputeOpt.getOpt() + " without the cache " + sites);
-			}
-		} else {
+		if (!noCacheRecompute) {
 			Set<Change> urls = new HashSet<>();
 
 			System.out.print("fetching changes...\r");
@@ -215,13 +212,12 @@ public class WikidataChangesFetcher {
 
 		Path hdtLocation = outputDirectory.resolve("sites.hdt");
 
-		if (noHdtRecompute) {
-			if (Files.exists(hdtLocation)) {
-				System.out.println("Using hdt " + hdtLocation);
+		if (!noHdtRecompute) {
+			if (Files.exists(sites)) {
+				System.out.println("Using cache " + sites);
 			} else {
-				throw new IOException("Using --" + noHdtRecomputeOpt.getLongOpt() + " -" + noHdtRecomputeOpt.getOpt() + " without the hdt " + hdtLocation);
+				throw new IOException("can't find cache " + sites);
 			}
-		} else {
 			Set<String> subjects = fetcher.fetchSubjectOfCache("http://www.wikidata.org/entity/", sites);
 
 			System.out.println();
@@ -235,6 +231,11 @@ public class WikidataChangesFetcher {
 
 		if (hdtSource != null) {
 			BitmapAccess bitmap = null;
+			if (Files.exists(hdtLocation)) {
+				System.out.println("Using hdt " + hdtLocation);
+			} else {
+				throw new IOException("Can't find hdt " + hdtLocation);
+			}
 			try {
 				try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad);
 						HDT sitesHDT = loadOrMap(hdtLocation, hdtLoad)) {

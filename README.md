@@ -32,3 +32,26 @@ java -Xmx4g -jar ./wiki-changes.jar --date UTC_DATE_TOSEARCH --hdtsource YOUR_PR
 - `-Xmx4g` is here to specify the memory to allocate to the process, here 4GB, the diff/cat computation and the changes hdt creation can require a lot of memory.
 
 the result will be in `cache/result.hdt`.
+
+
+## Steps
+
+The wiki-changes is composed of multiple steps, you can ignore with an option.
+
+### Read updates
+
+Find the updates in the wiki and put it in the `cache/sites` directory.
+
+**Ignore option**: `-C` or `--nonewcache`.
+
+### Sites HDT build
+
+Create an HDT from the `cache/sites` directory to `cache/sites.hdt` .
+
+**Ignore option**: `-H` or `--nonewhdt`.
+
+### Create new HDT from sites/src hdt
+
+Use the HDT in `cache/sites.hdt` and the hdt specified in `--hdtsource` to create a new HDT to `cache/result.hdt`.
+
+**Ignore option**: Don't specify the `--hdtsource` option.
