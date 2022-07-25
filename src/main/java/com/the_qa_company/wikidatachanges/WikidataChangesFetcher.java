@@ -7,23 +7,19 @@ import com.the_qa_company.wikidatachanges.utils.BitmapAccess;
 import com.the_qa_company.wikidatachanges.utils.HDTUtils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Option;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
+import org.apache.commons.cli.*;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
+import org.rdfhdt.hdt.dictionary.Dictionary;
 import org.rdfhdt.hdt.dictionary.DictionarySection;
 import org.rdfhdt.hdt.enums.RDFNotation;
-import org.rdfhdt.hdt.exceptions.NotFoundException;
+import org.rdfhdt.hdt.enums.TripleComponentRole;
 import org.rdfhdt.hdt.hdt.HDT;
 import org.rdfhdt.hdt.hdt.HDTManager;
 import org.rdfhdt.hdt.options.HDTOptions;
 import org.rdfhdt.hdt.options.HDTSpecification;
-import org.rdfhdt.hdt.triples.IteratorTripleString;
+import org.rdfhdt.hdt.triples.IteratorTripleID;
+import org.rdfhdt.hdt.triples.TripleID;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -452,25 +448,23 @@ public class WikidataChangesFetcher {
 	}
 
 	public void computeBitmap(HDT source, HDT sites, BitmapAccess bitmap) {
-		try {
-			int n = 0;
-			DictionarySection subjectsSection = sites.getDictionary().getSubjects();
-			long subjects = subjectsSection.getNumberOfElements();
+		int n = 0;
+		DictionarySection subjectsSection = sites.getDictionary().getSubjects();
+		Dictionary sourceDict = source.getDictionary();
+		long subjects = subjectsSection.getNumberOfElements();
 
-			for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext();) {
-				CharSequence subject = its.next();
-				IteratorTripleString it = source.search(subject, "", "");
-				while (it.hasNext()) {
-					it.next();
-					bitmap.set(it.getLastTriplePosition(), true);
-				}
-				printPercentage(++n, subjects, "compute delta bitmap", true);
+		for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext();) {
+			CharSequence subject = its.next();
+			long sid = sourceDict.stringToId(subject, TripleComponentRole.SUBJECT);
+			IteratorTripleID it = source.getTriples().search(new TripleID(sid, 0, 0));
+			while (it.hasNext()) {
+				it.next();
+				bitmap.set(it.getLastTriplePosition(), true);
 			}
-			printPercentage(subjects, subjects, "compute delta bitmap", true);
-			System.out.println();
-		} catch (NotFoundException e) {
-			// shouldn't happen with HDTs?
+			printPercentage(++n, subjects, "compute delta bitmap", true);
 		}
+		printPercentage(subjects, subjects, "compute delta bitmap", true);
+		System.out.println();
 	}
 
 	public Set<String> fetchSubjectOfCache(String baseURI, Path cache) throws IOException {
