@@ -1,4 +1,4 @@
 **Changelog 📓**
 
-- better HDT read for low-spec memory
-- better fetch speed
+- bug fixes
+- load bitmap by default and add map bitmap option
