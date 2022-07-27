@@ -3,7 +3,6 @@ package com.the_qa_company.wikidatachanges;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.the_qa_company.wikidatachanges.api.ApiResult;
 import com.the_qa_company.wikidatachanges.api.Change;
-import com.the_qa_company.wikidatachanges.utils.BitmapAccess;
 import com.the_qa_company.wikidatachanges.utils.HDTUtils;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +15,9 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.file.PathUtils;
+import org.rdfhdt.hdt.compact.bitmap.Bitmap64;
+import org.rdfhdt.hdt.compact.bitmap.Bitmap64Disk;
+import org.rdfhdt.hdt.compact.bitmap.ModifiableBitmap;
 import org.rdfhdt.hdt.dictionary.Dictionary;
 import org.rdfhdt.hdt.dictionary.DictionarySection;
 import org.rdfhdt.hdt.enums.RDFNotation;
@@ -27,16 +29,16 @@ import org.rdfhdt.hdt.options.HDTSpecification;
 import org.rdfhdt.hdt.triples.IteratorTripleID;
 import org.rdfhdt.hdt.triples.TripleID;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.file.FileVisitResult;
-import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
@@ -63,11 +65,14 @@ public class WikidataChangesFetcher {
 		Option noCacheRecomputeOpt = new Option("C", "nonewcache", false, "Don't recreate the cache");
 		Option clearCacheOpt = new Option("D", "deletecache", false, "Clear the cache after the HDT build");
 		Option maxTryOpt = new Option("m", "maxtry", true, "Number of try with http request, 0 for infinity (default: 5)");
-		Option sleepBetweenTryOpt = new Option("s", "sleeptry", true, "Millis to sleep between try , 0 for no sleep (default: 5000)");
+		Option sleepBetweenTryOpt = new Option("S", "sleeptry", true, "Millis to sleep between try , 0 for no sleep (default: 5000)");
 		Option noHdtRecomputeOpt = new Option("H", "nonewhdt", false, "Don't recompute the HDT");
 		Option hdtLoadOpt = new Option("l", "hdtload", false, "Load the HDT into memory, fast up the process");
 		Option hdtSourceOpt = new Option("s", "hdtsource", true, "Hdt source location (required to compute bitmaps and merge hdt)");
 		Option mapBitMapOpt = new Option("B", "mapbitmap", false, "map the bitmap into disk, reduce the memory using and the speed");
+		Option noDiffRecomputeOpt = new Option("u", "nodiff", false, "No diff recompute");
+		Option deleteDiffEndOpt = new Option("U", "deletediff", false, "Delete diff at the end");
+		Option deleteSitesEndOpt = new Option("v", "deletesites", false, "Delete cache HDT at the end");
 		Option helpOpt = new Option("h", "help", false, "Print help");
 
 		Options opt = new Options()
@@ -84,6 +89,9 @@ public class WikidataChangesFetcher {
 				.addOption(noHdtRecomputeOpt)
 				.addOption(hdtLoadOpt)
 				.addOption(hdtSourceOpt)
+				.addOption(noDiffRecomputeOpt)
+				.addOption(deleteDiffEndOpt)
+				.addOption(deleteSitesEndOpt)
 				.addOption(helpOpt);
 
 		CommandLineParser parser = new DefaultParser();
@@ -118,6 +126,9 @@ public class WikidataChangesFetcher {
 		long sleepBetweenTry = Long.parseLong(cl.getOptionValue(sleepBetweenTryOpt, "5000"));
 		boolean hdtLoad = cl.hasOption(hdtLoadOpt);
 		boolean mapBitmap = cl.hasOption(mapBitMapOpt);
+		boolean noDiffRecompute = cl.hasOption(noDiffRecomputeOpt);
+		boolean deleteDiffEnd = cl.hasOption(deleteDiffEndOpt);
+		boolean deleteSitesEnd = cl.hasOption(deleteSitesEndOpt);
 
 		Path hdtSource;
 		if (cl.hasOption(hdtSourceOpt)) {
@@ -142,6 +153,8 @@ public class WikidataChangesFetcher {
 				.builder()
 				.url(wikiapi)
 				.build());
+
+		Path deletedSubjects = outputDirectory.resolve("deletedSubjects");
 
 		if (!noCacheRecompute) {
 			Set<Change> urls = new HashSet<>();
@@ -174,50 +187,60 @@ public class WikidataChangesFetcher {
 
 			Object logSync = new Object() {
 			};
+			Object writeSync = new Object() {
+			};
 
-			AtomicLong downloads = new AtomicLong();
-			List<? extends Future<Path>> futures = urls.stream()
-					.map(change -> pool.submit(() -> {
-						Path path = sites.resolve(change.getTitle() + ".ttl");
-						if (!fetcher.downloadPageToFile(
-								new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl?flavor=simple"),
-								path,
-								Map.of(
-										"user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-										"accept", "text/turtle",
-										"accept-encoding", "gzip, deflate",
-										"accept-language", "en-US,en;q=0.9",
-										"upgrade-insecure-requests", "1",
-										"scheme", "https"
-								),
-								maxTry,
-								sleepBetweenTry
-						)) {
-							// write delete triple
-							Files.writeString(path, "");
-						}
-						long d = downloads.incrementAndGet();
-						synchronized (logSync) {
-							printPercentage(d, urls.size(), "downloading", true);
-						}
-						return path;
-					}))
-					.toList();
+			try (BufferedWriter writer = Files.newBufferedWriter(deletedSubjects)) {
+				AtomicLong downloads = new AtomicLong();
+				Map<String, String> urlHeader = Map.of(
+						"user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+						"accept", "text/turtle",
+						"accept-encoding", "gzip, deflate",
+						"accept-language", "en-US,en;q=0.9",
+						"upgrade-insecure-requests", "1",
+						"scheme", "https"
+				);
+				List<? extends Future<Path>> futures = urls.stream()
+						.map(change -> pool.submit(() -> {
+							Path path = sites.resolve(change.getTitle() + ".ttl");
+							if (!fetcher.downloadPageToFile(
+									new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl?flavor=simple"),
+									path,
+									urlHeader,
+									maxTry,
+									sleepBetweenTry
+							)) {
+								// write delete triple
+								synchronized (writeSync) {
+									writer.write("""
+											https://www.wikidata.org/wiki/Special:EntityData/%1$s
+											http://www.wikidata.org/entity/%1$s
+											""".formatted(change.getTitle()));
+								}
+							}
+							long d = downloads.incrementAndGet();
+							synchronized (logSync) {
+								printPercentage(d, urls.size(), "downloading", true);
+							}
+							return path;
+						}))
+						.toList();
 
-			try {
-				for (Future<Path> f : futures) {
-					f.get();
+				try {
+					for (Future<Path> f : futures) {
+						f.get();
+					}
+				} catch (ExecutionException e) {
+					pool.shutdownNow();
+					long d = downloads.get();
+					int percentage = (int) (100L * d / urls.size());
+					throw new IOException("Wasn't able to download all the files: " + d + "/" + urls.size() + " " + percentage + "%", e.getCause());
 				}
-			} catch (ExecutionException e) {
-				pool.shutdownNow();
-				long d = downloads.get();
-				int percentage = (int) (100L * d / urls.size());
-				throw new IOException("Wasn't able to download all the files: " + d + "/" + urls.size() + " " + percentage + "%", e.getCause());
+
+				System.out.println();
+
+				pool.shutdown();
 			}
-
-			System.out.println();
-
-			pool.shutdown();
 		}
 
 		System.out.println("Creating HDT from cache");
@@ -230,10 +253,7 @@ public class WikidataChangesFetcher {
 			} else {
 				throw new IOException("can't find cache " + sites);
 			}
-			Set<String> subjects = fetcher.fetchSubjectOfCache("http://www.wikidata.org/entity/", sites);
 
-			System.out.println();
-			System.out.println("Read " + subjects.size() + " subject(s).");
 			fetcher.createHDTOfCache(sites, "http://www.wikidata.org/entity/", hdtLocation, clearCache);
 			System.out.println("cache converted into: " + hdtLocation);
 		}
@@ -242,70 +262,101 @@ public class WikidataChangesFetcher {
 		Path bitmapLocation = outputDirectory.resolve("bitmap.bin");
 
 		if (hdtSource != null) {
-			BitmapAccess bitmap = null;
+			ModifiableBitmap bitmap = null;
 			if (Files.exists(hdtLocation)) {
 				System.out.println("Using hdt " + hdtLocation);
 			} else {
 				throw new IOException("Can't find hdt " + hdtLocation);
 			}
-			try {
-				try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad);
-						HDT sitesHDT = loadOrMap(hdtLocation, hdtLoad)) {
-					long count = sourceHDT.getTriples().getNumberOfElements() + 2;
-					System.out.println("build bitmap of size: " + count);
-					if (mapBitmap) {
-						bitmap = BitmapAccess.disk(count, bitmapLocation);
-					} else {
-						bitmap = BitmapAccess.memory(count, bitmapLocation);
+
+			Path diffLocation = outputDirectory.resolve("diff.hdt");
+
+			if (!noDiffRecompute) {
+				if (!Files.exists(deletedSubjects)) {
+					throw new IllegalArgumentException("deleted subject file doesn't exist! " + deletedSubjects);
+				}
+				try {
+					Set<String> deletedSubjectsSet = new HashSet<>();
+					try (BufferedReader deletedSubjectsReader = Files.newBufferedReader(deletedSubjects)) {
+						System.out.println("Reading deleted subjects");
+
+						String line;
+
+						while ((line = deletedSubjectsReader.readLine()) != null) {
+							if (line.isEmpty() || line.charAt(0) == '#') {
+								continue;
+							}
+
+							deletedSubjectsSet.add(line);
+							System.out.println("found " + deletedSubjectsSet.size() + " deleted subjects\r");
+						}
+						System.out.println();
 					}
-					fetcher.computeBitmap(sourceHDT, sitesHDT, bitmap);
-				}
-				bitmap.save();
-				System.out.println("bitmap saved to " + bitmapLocation);
+					try (HDT sourceHDT = loadOrMap(hdtSource, hdtLoad);
+						 HDT sitesHDT = loadOrMap(hdtLocation, hdtLoad)) {
+						long count = sourceHDT.getTriples().getNumberOfElements() + 2;
+						System.out.println("build bitmap of size: " + count);
+						if (mapBitmap) {
+							bitmap = new Bitmap64Disk(bitmapLocation.toAbsolutePath().toString(), count);
+						} else {
+							bitmap = new Bitmap64(count);
+						}
+						fetcher.computeBitmap(sourceHDT, sitesHDT, deletedSubjectsSet, bitmap);
+					}
 
 
-				System.out.println("create diff");
-				Path diffLocation = outputDirectory.resolve("diff.hdt");
-				Path diffWork = diffLocation.resolveSibling("diff_work");
-				Files.createDirectories(diffWork);
-				try (HDT hdtDiff = HDTManager.diffHDTBit(
-						diffWork.toAbsolutePath().toString(),
-						hdtSource.toAbsolutePath().toString(),
-						bitmap,
-						new HDTSpecification(),
-						HDTUtils::listener
-				)) {
-					System.out.println();
-					hdtDiff.saveToHDT(diffLocation.toAbsolutePath().toString(), null);
-					System.out.println("diff created to " + diffLocation);
+					System.out.println("create diff");
+					Path diffWork = diffLocation.resolveSibling("diff_work");
+					Files.createDirectories(diffWork);
+					try (HDT hdtDiff = HDTManager.diffHDTBit(
+							diffWork.toAbsolutePath() + "/",
+							hdtSource.toAbsolutePath().toString(),
+							bitmap,
+							new HDTSpecification(),
+							HDTUtils::listener
+					)) {
+						System.out.println();
+						hdtDiff.saveToHDT(diffLocation.toAbsolutePath().toString(), null);
+						System.out.println("diff created to " + diffLocation);
+					} finally {
+						PathUtils.deleteDirectory(diffWork);
+					}
 				} finally {
-					PathUtils.deleteDirectory(diffWork);
+					if (bitmap instanceof Closeable) {
+						((Closeable) bitmap).close();
+					}
 				}
-				System.out.println("create cat from diff/cache");
-				Path resultHDTLocation = outputDirectory.resolve("result.hdt");
-				Path catWork = diffLocation.resolveSibling("cat_work");
-				Files.createDirectories(catWork);
-				try (HDT hdtCat = HDTManager.catHDT(
-						catWork.toAbsolutePath().toString(),
-						diffLocation.toAbsolutePath().toString(),
-						hdtLocation.toAbsolutePath().toString(),
-						new HDTSpecification(),
-						HDTUtils::listener
-				)) {
-					System.out.println();
-					hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
-					System.out.println("cat created to " + resultHDTLocation);
+			} else {
+				if (Files.exists(diffLocation)) {
+					System.out.println("Using diff hdt " + diffLocation);
+				} else {
+					throw new IOException("can't find diff hdt " + diffLocation);
+				}
+			}
+			System.out.println("create cat from diff/cache");
+			Path resultHDTLocation = outputDirectory.resolve("result.hdt");
+			Path catWork = diffLocation.resolveSibling("cat_work");
+			Files.createDirectories(catWork);
+			try (HDT hdtCat = HDTManager.catHDT(
+					catWork.toAbsolutePath() + "/",
+					diffLocation.toAbsolutePath().toString(),
+					hdtLocation.toAbsolutePath().toString(),
+					new HDTSpecification(),
+					HDTUtils::listener
+			)) {
+				System.out.println();
+				hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
+				System.out.println("cat created to " + resultHDTLocation);
 
-					System.out.println("done.");
-				} finally {
-					PathUtils.deleteDirectory(catWork);
-				}
-				// Files.delete(diffLocation);
-				// Files.delete(hdtLocation);
+				System.out.println("done.");
 			} finally {
-				if (bitmap != null) {
-					bitmap.close();
-				}
+				PathUtils.deleteDirectory(catWork);
+			}
+			if (deleteDiffEnd) {
+				Files.delete(diffLocation);
+			}
+			if (deleteSitesEnd) {
+				Files.delete(hdtLocation);
 			}
 		} else {
 			System.out.println("HDT Source not specified, no bitmap/merge hdt built, use --" + hdtSourceOpt.getLongOpt() + " (hdt) to add a source");
@@ -387,17 +438,6 @@ public class WikidataChangesFetcher {
 	/**
 	 * call the wikidata changes api
 	 *
-	 * @param elementPerRead number of elements to query to the wiki api
-	 * @return result
-	 * @throws IOException api call fail
-	 */
-	public ApiResult changesApiCall(long elementPerRead) throws IOException {
-		return changesApiCall(null, elementPerRead);
-	}
-
-	/**
-	 * call the wikidata changes api
-	 *
 	 * @param rcchange       the rcchange id for restart
 	 * @param elementPerRead number of elements to query to the wiki api
 	 * @return result
@@ -465,15 +505,25 @@ public class WikidataChangesFetcher {
 		}
 	}
 
-	public void computeBitmap(HDT source, HDT sites, BitmapAccess bitmap) {
+	public void computeBitmap(HDT source, HDT sites, Set<String> deletedSubjects, ModifiableBitmap bitmap) {
 		int n = 0;
 		DictionarySection subjectsSection = sites.getDictionary().getSubjects();
 		Dictionary sourceDict = source.getDictionary();
-		long subjects = subjectsSection.getNumberOfElements();
+		long subjects = subjectsSection.getNumberOfElements() + deletedSubjects.size();
 		long deleteStatements = 0;
 
-		for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext();) {
+		for (Iterator<? extends CharSequence> its = subjectsSection.getSortedEntries(); its.hasNext(); ) {
 			CharSequence subject = its.next();
+			long sid = sourceDict.stringToId(subject, TripleComponentRole.SUBJECT);
+			IteratorTripleID it = source.getTriples().search(new TripleID(sid, 0, 0));
+			while (it.hasNext()) {
+				it.next();
+				bitmap.set(it.getLastTriplePosition(), true);
+				deleteStatements++;
+			}
+			printPercentage(++n, subjects, "compute delete bitmap " + deleteStatements + " statement(s) to delete", true);
+		}
+		for (CharSequence subject : deletedSubjects) {
 			long sid = sourceDict.stringToId(subject, TripleComponentRole.SUBJECT);
 			IteratorTripleID it = source.getTriples().search(new TripleID(sid, 0, 0));
 			while (it.hasNext()) {
@@ -487,38 +537,4 @@ public class WikidataChangesFetcher {
 		System.out.println();
 	}
 
-	public Set<String> fetchSubjectOfCache(String baseURI, Path cache) throws IOException {
-		Set<String> subjects = new HashSet<>();
-		Files.walkFileTree(cache, new FileVisitor<>() {
-			@Override
-			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-				return FileVisitResult.CONTINUE;
-			}
-
-			@Override
-			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-				String filename = file.getFileName().toString();
-
-				int dotIndex = filename.indexOf(".");
-				if (dotIndex != -1) {
-					String iri = baseURI + filename.substring(0, dotIndex);
-					subjects.add(iri);
-					System.out.print("found subject " + iri + "         \r");
-				}
-
-				return FileVisitResult.CONTINUE;
-			}
-
-			@Override
-			public FileVisitResult visitFileFailed(Path file, IOException exc) {
-				return FileVisitResult.CONTINUE;
-			}
-
-			@Override
-			public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
-				return FileVisitResult.CONTINUE;
-			}
-		});
-		return subjects;
-	}
 }

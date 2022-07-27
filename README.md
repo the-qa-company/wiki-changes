@@ -2,6 +2,15 @@
 
 Tool to extract diff from a wikibase instance
 
+- [wikibase-changes](#wikibase-changes)
+  - [Required](#required)
+  - [Install](#install)
+  - [Usage](#usage)
+  - [Steps](#steps)
+    - [Read updates](#read-updates)
+    - [Sites HDT build](#sites-hdt-build)
+    - [Create new HDT from sites/src hdt](#create-new-hdt-from-sitessrc-hdt)
+
 ## Required
 
 - Java 17
@@ -13,6 +22,8 @@ You can download the latest version in the [release section](https://github.com/
 
 
 You can also clone and compile the jar by yourself with these commands
+
+**For now, you need to use a custom library to fix an issue with the Java 9 dependencies here: https://github.com/ate47/hdt-java/tree/diff_fix, clone it and run `mvn install -DskipTests` to isntall it**
 
 ```bash
 git clone https://github.com/the-qa-company/wiki-changes.git
@@ -40,7 +51,7 @@ The wiki-changes is composed of multiple steps, you can ignore with an option.
 
 ### Read updates
 
-Find the updates in the wiki and put it in the `cache/sites` directory.
+Find the updates in the wiki and put it in the `cache/sites` directory, will also write deleted subjects into `cache/deletedSubjects` (one line/subject).
 
 **Ignore option**: `-C` or `--nonewcache`.
 

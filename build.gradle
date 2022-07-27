@@ -4,9 +4,11 @@ plugins {
 }
 
 group 'com.the-qa-company'
-version '0.1.2-SNAPSHOT'
+version '1.0.0'
 
 repositories {
+    // use dev HDT
+    mavenLocal()
     mavenCentral()
 }
 
