@@ -9,7 +9,10 @@ Tool to extract diff from a wikibase instance
   - [Steps](#steps)
     - [Read updates](#read-updates)
     - [Sites HDT build](#sites-hdt-build)
-    - [Create new HDT from sites/src hdt](#create-new-hdt-from-sitessrc-hdt)
+    - [Create new indexed HDT from the sites and source hdts](#create-new-indexed-hdt-from-the-sites-and-source-hdts)
+      - [Diff HDT](#diff-hdt)
+      - [Cat HDTs](#cat-hdts)
+      - [Create index](#create-index)
 
 ## Required
 
@@ -61,8 +64,26 @@ Create an HDT from the `cache/sites` directory to `cache/sites.hdt` .
 
 **Ignore option**: `-H` or `--nonewhdt`.
 
-### Create new HDT from sites/src hdt
+### Create new indexed HDT from the sites and source hdts
 
 Use the HDT in `cache/sites.hdt` and the hdt specified in `--hdtsource` to create a new HDT to `cache/result.hdt`.
 
-**Ignore option**: Don't specify the `--hdtsource` option.
+**Ignore option**: Don't specify the `--hdtsource`
+
+#### Diff HDT
+
+Remove all the subjects of the sites from the source HDT and create a new HDT without them in `cache/diff.hdt`.
+
+**Ignore option**: `-u` or `--nodiff`
+
+#### Cat HDTs
+
+Cat the `cache/sites.hdt` HDT and the `cache/diff.hdt` into `cache/result.hdt`.
+
+**Ignore option**: `-p` or `--notcat`
+
+#### Create index
+
+Create the `cache/result.hdt.index.v1-1` file for the `cache/result.hdt` HDT.
+
+**Ignore option**: `-I` or `--noindex`

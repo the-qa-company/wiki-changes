@@ -46,6 +46,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -73,6 +74,8 @@ public class WikidataChangesFetcher {
 		Option noDiffRecomputeOpt = new Option("u", "nodiff", false, "No diff recompute");
 		Option deleteDiffEndOpt = new Option("U", "deletediff", false, "Delete diff at the end");
 		Option deleteSitesEndOpt = new Option("v", "deletesites", false, "Delete cache HDT at the end");
+		Option noCatOpt = new Option("p", "notcat", false, "No cat recompute"); // *sad cat noise*
+		Option noCreateIndexOpt = new Option("I", "noindex", false, "Don't create the hdt index at the end");
 		Option helpOpt = new Option("h", "help", false, "Print help");
 
 		Options opt = new Options()
@@ -92,6 +95,8 @@ public class WikidataChangesFetcher {
 				.addOption(noDiffRecomputeOpt)
 				.addOption(deleteDiffEndOpt)
 				.addOption(deleteSitesEndOpt)
+				.addOption(noCreateIndexOpt)
+				.addOption(noCatOpt)
 				.addOption(helpOpt);
 
 		CommandLineParser parser = new DefaultParser();
@@ -102,23 +107,31 @@ public class WikidataChangesFetcher {
 			formatter.printHelp("wikichanges", opt, true);
 			return;
 		}
+
 		if (cl.hasOption(todayOpt)) {
 			System.out.println(Instant.now().toString());
 			return;
 		}
-		if (!cl.hasOption(dateOpt)) {
+
+		if (cl.getOptions().length == 0) {
+			// no option, write help
 			HelpFormatter formatter = new HelpFormatter();
 			formatter.printHelp("wikichanges", "Date option missing", opt, "", true);
 			return;
 		}
+
 		Path outputDirectory = Path.of(cl.getOptionValue(cacheOpt, "cache"));
 		Path sites = outputDirectory.resolve("sites");
 		if (!Files.exists(outputDirectory)) {
 			Files.createDirectories(outputDirectory);
 		}
+
 		int elementPerRead = Integer.parseInt(cl.getOptionValue(elementsOpt, "500"));
 		String wikiapi = cl.getOptionValue(wikiapiOpt, "https://www.wikidata.org/w/api.php");
-		Date date = Date.from(Instant.parse(cl.getOptionValue(dateOpt)));
+		Date date = Optional
+				.ofNullable(cl.getOptionValue(dateOpt))
+				.map(d -> Date.from(Instant.parse(d)))
+				.orElse(null);
 		boolean clearCache = cl.hasOption(clearCacheOpt);
 		boolean noHdtRecompute = cl.hasOption(noHdtRecomputeOpt);
 		boolean noCacheRecompute = cl.hasOption(noCacheRecomputeOpt);
@@ -129,6 +142,8 @@ public class WikidataChangesFetcher {
 		boolean noDiffRecompute = cl.hasOption(noDiffRecomputeOpt);
 		boolean deleteDiffEnd = cl.hasOption(deleteDiffEndOpt);
 		boolean deleteSitesEnd = cl.hasOption(deleteSitesEndOpt);
+		boolean noCat = cl.hasOption(noCatOpt);
+		boolean noCreateIndex = cl.hasOption(noCreateIndexOpt);
 
 		Path hdtSource;
 		if (cl.hasOption(hdtSourceOpt)) {
@@ -147,8 +162,6 @@ public class WikidataChangesFetcher {
 			throw new IllegalArgumentException("sleepBetweenTry can't be negative! " + sleepBetweenTry);
 		}
 
-		System.out.println("Reading from date: " + date);
-
 		WikidataChangesFetcher fetcher = new WikidataChangesFetcher(FetcherOptions
 				.builder()
 				.url(wikiapi)
@@ -157,6 +170,11 @@ public class WikidataChangesFetcher {
 		Path deletedSubjects = outputDirectory.resolve("deletedSubjects");
 
 		if (!noCacheRecompute) {
+			if (date == null) {
+				throw new IllegalArgumentException("Missing --" + dateOpt.getLongOpt() + " to recompute the cache!");
+			}
+
+			System.out.println("Reading from date: " + date);
 			Set<Change> urls = new HashSet<>();
 
 			System.out.print("fetching changes...\r");
@@ -243,16 +261,14 @@ public class WikidataChangesFetcher {
 			}
 		}
 
-		System.out.println("Creating HDT from cache");
-
 		Path hdtLocation = outputDirectory.resolve("sites.hdt");
 
 		if (!noHdtRecompute) {
-			if (Files.exists(sites)) {
-				System.out.println("Using cache " + sites);
-			} else {
+			if (!Files.exists(sites)) {
 				throw new IOException("can't find cache " + sites);
 			}
+
+			System.out.println("Creating HDT from cache " + sites);
 
 			fetcher.createHDTOfCache(sites, "http://www.wikidata.org/entity/", hdtLocation, clearCache);
 			System.out.println("cache converted into: " + hdtLocation);
@@ -326,38 +342,49 @@ public class WikidataChangesFetcher {
 						((Closeable) bitmap).close();
 					}
 				}
-			} else {
-				if (Files.exists(diffLocation)) {
-					System.out.println("Using diff hdt " + diffLocation);
-				} else {
+			}
+
+			Path resultHDTLocation = outputDirectory.resolve("result.hdt");
+			if (!noCat) {
+				if (!Files.exists(diffLocation)) {
 					throw new IOException("can't find diff hdt " + diffLocation);
 				}
-			}
-			System.out.println("create cat from diff/cache");
-			Path resultHDTLocation = outputDirectory.resolve("result.hdt");
-			Path catWork = diffLocation.resolveSibling("cat_work");
-			Files.createDirectories(catWork);
-			try (HDT hdtCat = HDTManager.catHDT(
-					catWork.toAbsolutePath() + "/",
-					diffLocation.toAbsolutePath().toString(),
-					hdtLocation.toAbsolutePath().toString(),
-					new HDTSpecification(),
-					HDTUtils::listener
-			)) {
-				System.out.println();
-				hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
-				System.out.println("cat created to " + resultHDTLocation);
 
-				System.out.println("done.");
-			} finally {
-				PathUtils.deleteDirectory(catWork);
+				System.out.println("create cat from diff/cache");
+				Path catWork = diffLocation.resolveSibling("cat_work");
+				Files.createDirectories(catWork);
+				try (HDT hdtCat = HDTManager.catHDT(
+						catWork.toAbsolutePath() + "/",
+						diffLocation.toAbsolutePath().toString(),
+						hdtLocation.toAbsolutePath().toString(),
+						new HDTSpecification(),
+						HDTUtils::listener
+				)) {
+					System.out.println();
+					hdtCat.saveToHDT(resultHDTLocation.toAbsolutePath().toString(), null);
+					System.out.println("cat created to " + resultHDTLocation);
+				} finally {
+					PathUtils.deleteDirectory(catWork);
+				}
 			}
 			if (deleteDiffEnd) {
+				System.out.println("delete " + diffLocation);
 				Files.delete(diffLocation);
 			}
 			if (deleteSitesEnd) {
+				System.out.println("delete " + hdtLocation);
 				Files.delete(hdtLocation);
 			}
+			if (!noCreateIndex) {
+				if (!Files.exists(resultHDTLocation)) {
+					throw new IllegalArgumentException("can't find cat hdt " + resultHDTLocation);
+				}
+				System.out.println("Indexing " + resultHDTLocation);
+				HDTManager.mapIndexedHDT(resultHDTLocation.toAbsolutePath().toString(), HDTUtils::listener).close();
+				System.out.println();
+			}
+
+			System.out.println("done.");
 		} else {
 			System.out.println("HDT Source not specified, no bitmap/merge hdt built, use --" + hdtSourceOpt.getLongOpt() + " (hdt) to add a source");
 		}
