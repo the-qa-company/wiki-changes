@@ -1,5 +1,3 @@
 **Changelog 📓**
 
-- add more options
-- fix #2 (delete subjects)
-- set to release 1.0.0
+- add --flavorlist (-F) and -flavor <args> (-f) options to set the RDF output flavor

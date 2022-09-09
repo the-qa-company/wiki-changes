@@ -2,6 +2,7 @@ package com.the_qa_company.wikidatachanges;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.the_qa_company.wikidatachanges.api.ApiResult;
+import com.the_qa_company.wikidatachanges.api.RDFFlavor;
 import com.the_qa_company.wikidatachanges.api.Change;
 import com.the_qa_company.wikidatachanges.utils.HDTUtils;
 import lombok.Getter;
@@ -45,6 +46,7 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -63,6 +65,8 @@ public class WikidataChangesFetcher {
 		Option wikiapiOpt = new Option("w", "wikiapi", true, "Wiki api location");
 		Option todayOpt = new Option("T", "today", false, "Print date");
 		Option dateOpt = new Option("d", "date", true, "Wiki api location (required)");
+		Option flavorOpt = new Option("f", "flavor", true, "The flavor to retrieve the RDF outputs, important if you are using a truthy hdt");
+		Option flavorListOpt = new Option("F", "flavorlist", false, "The flavor list for the --" + flavorOpt.getLongOpt() + " option");
 		Option noCacheRecomputeOpt = new Option("C", "nonewcache", false, "Don't recreate the cache");
 		Option clearCacheOpt = new Option("D", "deletecache", false, "Clear the cache after the HDT build");
 		Option maxTryOpt = new Option("m", "maxtry", true, "Number of try with http request, 0 for infinity (default: 5)");
@@ -84,6 +88,8 @@ public class WikidataChangesFetcher {
 				.addOption(wikiapiOpt)
 				.addOption(todayOpt)
 				.addOption(dateOpt)
+				.addOption(flavorOpt)
+				.addOption(flavorListOpt)
 				.addOption(clearCacheOpt)
 				.addOption(noCacheRecomputeOpt)
 				.addOption(maxTryOpt)
@@ -110,6 +116,14 @@ public class WikidataChangesFetcher {
 
 		if (cl.hasOption(todayOpt)) {
 			System.out.println(Instant.now().toString());
+			return;
+		}
+
+		if (cl.hasOption(flavorListOpt)) {
+			System.out.println("Flavors:");
+			for (RDFFlavor f : RDFFlavor.values()) {
+				System.out.println(f.name().toLowerCase(Locale.ROOT) + " - " + f.getDescription() + (f.isShouldSpecify() ? "" : " (default)"));
+			}
 			return;
 		}
 
@@ -144,6 +158,7 @@ public class WikidataChangesFetcher {
 		boolean deleteSitesEnd = cl.hasOption(deleteSitesEndOpt);
 		boolean noCat = cl.hasOption(noCatOpt);
 		boolean noCreateIndex = cl.hasOption(noCreateIndexOpt);
+		RDFFlavor flavor = RDFFlavor.valueOf(cl.getOptionValue(flavorOpt, RDFFlavor.getDefaultFlavor().name()).toUpperCase(Locale.ROOT));
 
 		Path hdtSource;
 		if (cl.hasOption(hdtSourceOpt)) {
@@ -218,11 +233,22 @@ public class WikidataChangesFetcher {
 						"upgrade-insecure-requests", "1",
 						"scheme", "https"
 				);
+
+				String flavorUrlOpt;
+
+				if (flavor.isShouldSpecify()) {
+					flavorUrlOpt = "?flavor=" + flavor.getTitle();
+				} else {
+					flavorUrlOpt = "";
+				}
+
 				List<? extends Future<Path>> futures = urls.stream()
 						.map(change -> pool.submit(() -> {
 							Path path = sites.resolve(change.getTitle() + ".ttl");
+							String url = "https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl" + flavorUrlOpt;
+
 							if (!fetcher.downloadPageToFile(
-									new URL("https://www.wikidata.org/wiki/Special:EntityData/" + change.getTitle() + ".ttl?flavor=simple"),
+									new URL(url),
 									path,
 									urlHeader,
 									maxTry,
