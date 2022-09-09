@@ -25,3 +25,8 @@ wiki-changes.jar
 .idea
 
 cache
+build_tmp
+date.txt
+
+# Bad os files
+.DS_Store

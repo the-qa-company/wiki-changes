@@ -13,6 +13,7 @@ Tool to extract diff from a wikibase instance
       - [Diff HDT](#diff-hdt)
       - [Cat HDTs](#cat-hdts)
       - [Create index](#create-index)
+  - [Up to date script](#up-to-date-script)
 
 ## Required
 
@@ -87,3 +88,19 @@ Cat the `cache/sites.hdt` HDT and the `cache/diff.hdt` into `cache/result.hdt`.
 Create the `cache/result.hdt.index.v1-1` file for the `cache/result.hdt` HDT.
 
 **Ignore option**: `-I` or `--noindex`
+
+## Up to date script
+
+```bash
+scripts/uptodate.sh (base hdt) (output hdt)
+```
+
+This script will take the base hdt, go back to a particular date and create the updated HDT.
+
+**Usage**:
+
+- Get a start HDT with an UTC date associate to it, you can type `java -jar ./wiki-changes.jar -T` to get the current date.
+- Write the UTC date to the `date.txt` file
+- (If required) You can add more/less ram to the Java process by editing the `scripts/uptodate.sh` config section
+- run the command `scripts/uptodate.sh (base hdt) (output hdt)`, the process will create an up to date HDT from the base HDT with a backtrace to the date contained in `date.txt`. The end HDT will be written in the *base hdt* file and then copy to the *output hdt* file before waiting for the next iteration. The `date.txt` file will be updated to the current date.
+
