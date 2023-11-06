@@ -1,15 +1,15 @@
 package com.the_qa_company.wikidatachanges.utils;
 
 import lombok.experimental.UtilityClass;
-import org.rdfhdt.hdt.enums.RDFNotation;
-import org.rdfhdt.hdt.exceptions.ParserException;
-import org.rdfhdt.hdt.hdt.HDT;
-import org.rdfhdt.hdt.hdt.HDTManager;
-import org.rdfhdt.hdt.options.HDTOptions;
-import org.rdfhdt.hdt.rdf.RDFParserCallback;
-import org.rdfhdt.hdt.rdf.RDFParserFactory;
-import org.rdfhdt.hdt.triples.TripleString;
-import org.rdfhdt.hdt.util.StopWatch;
+import com.the_qa_company.qendpoint.core.enums.RDFNotation;
+import com.the_qa_company.qendpoint.core.exceptions.ParserException;
+import com.the_qa_company.qendpoint.core.hdt.HDT;
+import com.the_qa_company.qendpoint.core.hdt.HDTManager;
+import com.the_qa_company.qendpoint.core.options.HDTOptions;
+import com.the_qa_company.qendpoint.core.rdf.RDFParserCallback;
+import com.the_qa_company.qendpoint.core.rdf.RDFParserFactory;
+import com.the_qa_company.qendpoint.core.triples.TripleString;
+import com.the_qa_company.qendpoint.core.util.StopWatch;
 
 import java.io.BufferedOutputStream;
 import java.io.IOException;

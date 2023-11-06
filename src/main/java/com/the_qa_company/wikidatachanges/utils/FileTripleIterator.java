@@ -1,9 +1,7 @@
 package com.the_qa_company.wikidatachanges.utils;
 
-import org.rdfhdt.hdt.triples.TripleString;
-import org.rdfhdt.hdt.util.UnicodeEscape;
+import com.the_qa_company.qendpoint.core.triples.TripleString;
 
-import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.Iterator;
 import java.util.function.Consumer;

@@ -28,17 +28,6 @@ jobs:
           java-version: 17
       - name: ⚙ Checkout repository
         uses: actions/checkout@v2
-      - name: ⚙ Checkout HDT-Java
-        uses: actions/checkout@v3
-        with:
-          repository: ate47/hdt-java
-          path: HDTJava
-          ref: diff_fix
-      - name: ⚙ Install custom HDT-Java version
-        run: |
-          cd HDTJava
-          mvn install -DskipTests
-          cd ..
       - name: 🗝️ Update permissions
         run: chmod u+x gradlew
       - name: 🌍 Fetch dependencies
