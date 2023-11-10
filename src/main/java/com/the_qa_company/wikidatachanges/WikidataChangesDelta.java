@@ -184,7 +184,7 @@ public class WikidataChangesDelta {
 			osnt.write(0);
 
 			// write header CRC and prepare for data part
-			// CRC (4B)
+			// CRC (1B)
 			osnt.writeCRC();
 			osnt.setCRC(new CRC32());
 
