@@ -2,8 +2,9 @@ package com.the_qa_company.wikidatachanges;
 
 import com.the_qa_company.qendpoint.core.compact.bitmap.Bitmap;
 import com.the_qa_company.qendpoint.core.compact.bitmap.Bitmap64Big;
+import com.the_qa_company.qendpoint.core.compact.bitmap.ModifiableBitmap;
+import com.the_qa_company.qendpoint.core.compact.bitmap.NegBitmap;
 import com.the_qa_company.qendpoint.core.enums.TripleComponentRole;
-import com.the_qa_company.qendpoint.core.exceptions.NotFoundException;
 import com.the_qa_company.qendpoint.core.hdt.HDT;
 import com.the_qa_company.qendpoint.core.hdt.HDTManager;
 import com.the_qa_company.qendpoint.core.iterator.utils.ExceptionIterator;
@@ -13,10 +14,12 @@ import com.the_qa_company.qendpoint.core.options.HDTOptionsKeys;
 import com.the_qa_company.qendpoint.core.triples.IteratorTripleID;
 import com.the_qa_company.qendpoint.core.triples.TripleID;
 import com.the_qa_company.qendpoint.core.util.StopWatch;
+import com.the_qa_company.qendpoint.core.util.io.IOUtil;
 import com.the_qa_company.qendpoint.core.util.listener.ColorTool;
 import com.the_qa_company.qendpoint.core.util.listener.MultiThreadListenerConsole;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -181,9 +184,10 @@ public class WikidataChangesCompute {
 
 				long divSplit = triples / div;
 				for (int i = 0; i < div; i++) {
-					try (Bitmap64Big delete = Bitmap64Big.memory(triples)) {
+					ModifiableBitmap delete = NegBitmap.of(Bitmap64Big.memory(triples));
+					try {
 						for (long idx = i * divSplit; idx < (i + 1) * divSplit; idx++) {
-							delete.set(idx, true);
+							delete.set(idx, false);
 						}
 
 						Path splitName = inHDTFile.resolveSibling("split-" + (i + 1) + "-" + inHDTFile.getFileName());
@@ -192,6 +196,8 @@ public class WikidataChangesCompute {
 						try (HDT hdtSplit = HDTManager.diffBitCatHDTPath(List.of(inHDTFile), List.of(delete), spec, console)) {
 							hdtSplit.saveToHDT(splitName);
 						}
+					} finally {
+						IOUtil.closeQuietly(delete);
 					}
 				}
 				tool.log(div + " split generated");
@@ -222,9 +228,10 @@ public class WikidataChangesCompute {
 
 				StopWatch sw = new StopWatch();
 				try (Bitmap64Big bitmap = Bitmap64Big.map(bitmapFile, triples)) {
-					for (int i = 0; i < div; i++) {
+					mainLoop:
+					for (int i = 0; i <= div; i++) {
 
-						tool.log("Test with #" + (i + 1) + " split");
+						tool.log("Test with #" + i + " split");
 						sw.reset();
 
 						List<Path> ds = new ArrayList<>();
@@ -233,17 +240,25 @@ public class WikidataChangesCompute {
 						ds.add(inHDTFile);
 						deletes.add(bitmap);
 
-						for (int j = 0; j < div; j++) {
-							Path splitName = deltaHDTFile.resolveSibling("split-" + (i + 1) + "-" + deltaHDTFile.getFileName());
+						for (int j = 0; j < i; j++) {
+							Path splitName = deltaHDTFile.resolveSibling("split-" + (j + 1) + "-" + deltaHDTFile.getFileName());
 							ds.add(splitName);
 							deletes.add(null);
+							if (!Files.exists(splitName)) {
+								tool.error("Missing datafile: " + splitName + " for j = " + j + " and i = " + i);
+								continue mainLoop;
+							}
 						}
 
 						HDTOptions spec2 = spec.pushTop();
-						// set profiler output
-						spec2.set(HDTOptionsKeys.PROFILER_OUTPUT_KEY, "prof" + (i + 1) + ".opt");
-						// optimize output
-						spec2.set(HDTOptionsKeys.HDTCAT_FUTURE_LOCATION, "changes.hdt");
+						spec2.setOptions(
+								// set profiler output
+								HDTOptionsKeys.PROFILER_OUTPUT_KEY, "prof" + (i + 1) + ".opt",
+								// optimize output
+								HDTOptionsKeys.HDTCAT_FUTURE_LOCATION, "changes.hdt"
+						);
+
+						tool.log("diff with " + ds.size() + " ds");
 
 						try (HDT hdtSplit = HDTManager.diffBitCatHDTPath(ds, deletes, spec2, console)) {
 							hdtSplit.saveToHDT("changes.hdt");
@@ -254,6 +269,81 @@ public class WikidataChangesCompute {
 					}
 				}
 
+			}
+			case "diffonly" -> {
+				if (args.length < 3) {
+					System.err.println("diffonly [in-hdt] [bitmap]");
+					return;
+				}
+
+				Path inHDTFile = Path.of(args[1]);
+				Path bitmapFile = Path.of(args[2]);
+				//Path deltaHDTFile = Path.of(args[3]);
+
+				tool.log("get hdt count");
+
+				long triples;
+				try (HDT hdt = HDTManager.mapHDT(inHDTFile)) {
+					triples = hdt.getTriples().getNumberOfElements();
+				}
+				tool.log("count: " + triples);
+
+				StopWatch sw = new StopWatch();
+				try (Bitmap64Big bitmap = Bitmap64Big.map(bitmapFile, triples)) {
+					try (HDT hdtSplit = HDTManager.diffBitCatHDTPath(List.of(inHDTFile), List.of(bitmap), spec, console)) {
+						hdtSplit.saveToHDT("changes.hdt");
+						tool.log("done in " + sw.stopAndShow());
+						long ntriples = hdtSplit.getTriples().getNumberOfElements();
+						tool.log("size: " + ntriples + "(+" + (triples * 100 / ntriples) + "%");
+					}
+				}
+			}
+			case "catonly" -> {
+
+				if (args.length < 3) {
+					System.err.println("catonly [in-hdt] [hdt2]");
+					return;
+				}
+
+				Path inHDTFile = Path.of(args[1]);
+				Path inHDTFile2 = Path.of(args[2]);
+				//Path deltaHDTFile = Path.of(args[3]);
+
+
+				StopWatch sw = new StopWatch();
+				try (HDT hdtSplit = HDTManager.catHDTPath(List.of(inHDTFile, inHDTFile2), spec, console)) {
+					hdtSplit.saveToHDT("changes.hdt");
+					tool.log("done in " + sw.stopAndShow());
+				}
+
+			}
+			case "catdiffonly" -> {
+				if (args.length < 4) {
+					System.err.println("diffonly [in-hdt] [bitmap] [delta]");
+					return;
+				}
+
+				Path inHDTFile = Path.of(args[1]);
+				Path bitmapFile = Path.of(args[2]);
+				Path deltaHDTFile = Path.of(args[3]);
+
+				tool.log("get hdt count");
+
+				long triples;
+				try (HDT hdt = HDTManager.mapHDT(inHDTFile)) {
+					triples = hdt.getTriples().getNumberOfElements();
+				}
+				tool.log("count: " + triples);
+
+				StopWatch sw = new StopWatch();
+				try (Bitmap64Big bitmap = Bitmap64Big.map(bitmapFile, triples)) {
+					try (HDT hdtSplit = HDTManager.diffBitCatHDTPath(List.of(inHDTFile, deltaHDTFile), Arrays.asList(bitmap, null), spec, console)) {
+						hdtSplit.saveToHDT("changes.hdt");
+						tool.log("done in " + sw.stopAndShow());
+						long ntriples = hdtSplit.getTriples().getNumberOfElements();
+						tool.log("size: " + ntriples + "(+" + (triples * 100 / ntriples) + "%");
+					}
+				}
 			}
 			default -> tool.error("Bad arg: " + args[0]);
 		}
