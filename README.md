@@ -104,3 +104,38 @@ This script will take the base hdt, go back to a particular date and create the 
 - (If required) You can add more/less ram to the Java process by editing the `scripts/uptodate.sh` config section
 - run the command `scripts/uptodate.sh (base hdt) (output hdt)`, the process will create an up to date HDT from the base HDT with a backtrace to the date contained in `date.txt`. The end HDT will be written in the *base hdt* file and then copy to the *output hdt* file before waiting for the next iteration. The `date.txt` file will be updated to the current date.
 
+## Diff experiment
+
+A test to compute the diff efficiency is usable.
+
+You need first to get a Wikidata HDT, then compute the delta HDT using the delta tool,
+
+replace the date by the date of your dump and simple by the flavor of the dump (simple=truthy, full=all)
+
+```powershell
+java -cp .\wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesDelta --date 2023-10-31T00:40:00Z -f simple -m 0 -S 10000
+```
+
+It'll create a file `delta.df`.
+
+This file format is usable to create HDTs using the qEndpoint CLI in the branch [dev_dl_file](https://github.com/the-qa-company/qEndpoint/tree/dev_dl_file) with rdf2hdt.
+
+Once you have you HDTs (dump + delta), you can run the different experiment using:
+
+```powershell
+# Create delete bitmap
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute bitmap delta.hdt wikidata.hdt bitmap.bin
+# Div a hdt into x pieces (here 7)
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute div delta.hdt 7
+# Run DiffCat with all the pieces (same names as output)
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute mergediff wikidata.hdt bitmap.bin delta.hdt 7
+# Compute diff of a HDT and a bitmap
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute diffonly wikidata.hdt bitmap.bin
+# move the result to diff.hdt
+mv changes.hdt diff.hdt
+# Compute cat of two HDTs
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute catonly diff.hdt delta.hdt
+# Compute diffcat of 2 HDTs and a bitmap
+java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute catdiffonly wikidata.hdt bitmap.bin delta.hdt
+```
+
