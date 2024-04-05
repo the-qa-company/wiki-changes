@@ -31,6 +31,8 @@ import com.the_qa_company.qendpoint.core.options.HDTOptions;
 import com.the_qa_company.qendpoint.core.triples.IteratorTripleID;
 import com.the_qa_company.qendpoint.core.triples.TripleID;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
@@ -100,14 +102,15 @@ public class WikidataChangesFetcher {
 				.addOption(deleteSitesEndOpt)
 				.addOption(noCreateIndexOpt)
 				.addOption(noCatOpt)
-				.addOption(helpOpt);
+				.addOption(helpOpt)
+				;
 
 		CommandLineParser parser = new DefaultParser();
 		CommandLine cl = parser.parse(opt, args);
 
 		if (cl.hasOption(helpOpt)) {
 			HelpFormatter formatter = new HelpFormatter();
-			formatter.printHelp("wikichanges", opt, true);
+			formatter.printHelp("wiki-changes-fetcher", opt, true);
 			return;
 		}
 
@@ -430,8 +433,8 @@ public class WikidataChangesFetcher {
 				}
 				headers.forEach(conn::setRequestProperty);
 
-				try (InputStream is = new GZIPInputStream(conn.getInputStream());
-				     OutputStream os = Files.newOutputStream(output)) {
+				try (InputStream is = new GZIPInputStream(new BufferedInputStream(conn.getInputStream()));
+				     OutputStream os = new BufferedOutputStream(Files.newOutputStream(output))) {
 					IOUtils.copy(is, os);
 					// we have the file, we can leave
 					return true;
@@ -471,7 +474,7 @@ public class WikidataChangesFetcher {
 				}
 				headers.forEach(conn::setRequestProperty);
 
-				try (InputStream is = conn.getInputStream();
+				try (InputStream is = new BufferedInputStream(conn.getInputStream());
 				     ByteArrayOutputStream os = new ByteArrayOutputStream()) {
 					IOUtils.copy(unzip ? new GZIPInputStream(is) : is, os);
 					// we have the file, we can leave

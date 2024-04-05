@@ -24,6 +24,9 @@ gradle-app.setting
 wiki-changes.jar
 .idea
 
+prof
+prof_bck
+*.opt
 cache
 build_tmp
 date.txt

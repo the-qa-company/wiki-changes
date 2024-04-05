@@ -1,4 +1,4 @@
 **Changelog 📓**
 
-- Update to qEndpoint core
-- Add main to fetch delta 
+- Better cli
+- add license to deployement

@@ -67,7 +67,7 @@ public class WikidataChangesDelta {
 
 		if (cl.hasOption(helpOpt)) {
 			HelpFormatter formatter = new HelpFormatter();
-			formatter.printHelp("wikichanges", opt, true);
+			formatter.printHelp("wiki-changes-delta", opt, true);
 			return;
 		}
 

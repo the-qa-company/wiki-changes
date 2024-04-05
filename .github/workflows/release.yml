@@ -39,13 +39,14 @@ jobs:
         run: 'echo "version: ${{ steps.version_get.outputs.version }}"'
       - name: 🏗️ Compile wiki-changes
         run: ./gradlew shadowJar
-      - name: ⚙️ Move compiled jar
-        run: mv ./build/libs/wikidata-changes-*-all.jar wiki-changes.jar
+      - name: ⚙️ Package CLI
+        shell: pwsh
+        run: scripts/package.ps1
       - name: ☁️ Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: "wiki-changes.jar"
-          path: "wiki-changes.jar"
+          name: "wikidata-changes"
+          path: "build/package/wikidata-changes.zip"
   create_release:
     name: 🚀 Create Github release
     environment:
@@ -61,7 +62,7 @@ jobs:
       - name: ⚙️ Extract artifacts
         run: |
           mkdir -p deploy_file
-          mv wiki-changes.jar/* deploy_file
+          mv wikidata-changes/* deploy_file
       - name: 🚀 Create release with artifacts
         uses: ncipollo/release-action@v1
         with:
