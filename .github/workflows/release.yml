@@ -34,7 +34,9 @@ jobs:
         run: ./gradlew --refresh-dependencies
       - name: ⚙️ Get version
         id: version_get
-        run: echo "::set-output name=version::$(scripts/get_version.sh)"
+        run: |
+          chmod u+x scripts/get_version.sh
+          echo "::set-output name=version::$(scripts/get_version.sh)"
       - name: ⚙️ Print version
         run: 'echo "version: ${{ steps.version_get.outputs.version }}"'
       - name: 🏗️ Compile wiki-changes
