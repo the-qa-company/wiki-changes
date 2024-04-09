@@ -1,9 +1,13 @@
 param(
+    $minlength,
+    $maxlength,
     $server,
     $sparql,
     $date,
     $updater,
     $delta,
+    [Switch]
+    $syncrequest,
     [Switch]
     $today,
     [Switch]

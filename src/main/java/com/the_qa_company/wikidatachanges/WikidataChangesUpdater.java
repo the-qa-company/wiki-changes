@@ -15,24 +15,26 @@ import org.eclipse.rdf4j.model.Literal;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.base.CoreDatatype;
+import org.eclipse.rdf4j.query.GraphQuery;
 import org.eclipse.rdf4j.query.GraphQueryResult;
 import org.eclipse.rdf4j.query.QueryLanguage;
 import org.eclipse.rdf4j.query.QueryResults;
 import org.eclipse.rdf4j.repository.Repository;
 import org.eclipse.rdf4j.repository.RepositoryConnection;
 import org.eclipse.rdf4j.repository.sparql.SPARQLRepository;
-import org.eclipse.rdf4j.rio.RDFFormat;
 import org.eclipse.rdf4j.rio.RDFParser;
-import org.eclipse.rdf4j.rio.Rio;
+import org.eclipse.rdf4j.rio.turtle.TurtleParser;
 import org.eclipse.rdf4j.sparqlbuilder.core.query.DeleteDataQuery;
 import org.eclipse.rdf4j.sparqlbuilder.core.query.InsertDataQuery;
 import org.eclipse.rdf4j.sparqlbuilder.core.query.Queries;
 import org.eclipse.rdf4j.sparqlbuilder.graphpattern.GraphPatterns;
 
+import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Collection;
@@ -48,20 +50,26 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 
 public class WikidataChangesUpdater {
+
+	private static final double EPSILON = 0.0000000000001;
 	private static final String CONFIG_FILE = "changes.cfg";
+
 	public static void main(String[] args) throws ParseException, IOException, InterruptedException {
-		final String DEFAULT_LOCAL_SPARQL_SERVER = "https://www.wikidata.org/wiki/Special:EntityData/";
+		final String DEFAULT_LOCAL_SPARQL_SERVER = "http://127.0.0.1:1234/api/endpoint/sparql";
 		final String DEFAULT_REMOTE_SERVER_UPDATER = "https://www.wikidata.org/w/api.php";
-		final String DEFAULT_REMOTE_SERVER = "http://query.wikidata.org/sparql";
+		final String DEFAULT_REMOTE_SERVER = "https://www.wikidata.org/wiki/Special:EntityData/";
 		Option sparqlOpt = new Option("s", "sparql", true, "local sparql server, default: " + DEFAULT_LOCAL_SPARQL_SERVER);
 		Option updaterOpt = new Option("u", "updater", true, "remote wiki update server, default: " + DEFAULT_REMOTE_SERVER_UPDATER);
 		Option serverOpt = new Option("S", "server", true, "remote wiki server, default: " + DEFAULT_REMOTE_SERVER);
 		Option dateOpt = new Option("d", "date", true, "Last date to lookup");
 		Option minLengthOpt = new Option("l", "minlength", true, "Min length of the update");
 		Option maxLengthOpt = new Option("L", "maxlength", true, "Max length of the update");
+		Option syncRequestOpt = new Option("R", "syncrequest", false, "Sync all SPARQL requests");
 		Option deltaFetchOpt = new Option("D", "delta", true, "Time delta between the fetch after lookup (ms), default: 10000");
 
 		Option todayOpt = new Option("T", "today", false, "Print date");
@@ -78,6 +86,7 @@ public class WikidataChangesUpdater {
 				.addOption(todayOpt)
 				.addOption(updaterOpt)
 				.addOption(colorOpt)
+				.addOption(syncRequestOpt)
 				.addOption(helpOpt);
 
 		CommandLineParser parser = new DefaultParser();
@@ -96,6 +105,7 @@ public class WikidataChangesUpdater {
 			return;
 		}
 
+		boolean syncRequest = cl.hasOption(syncRequestOpt);
 		String localSparql = cl.getOptionValue(sparqlOpt, DEFAULT_LOCAL_SPARQL_SERVER);
 		String remoteServer = cl.getOptionValue(serverOpt, DEFAULT_REMOTE_SERVER);
 		String remoteServerUpdater = cl.getOptionValue(updaterOpt, DEFAULT_REMOTE_SERVER_UPDATER);
@@ -125,7 +135,8 @@ public class WikidataChangesUpdater {
 			return;
 		}
 
-		tool.log("Starting updater...");
+		Path cfgFile = Path.of(CONFIG_FILE);
+		tool.log("Starting updater, cfg: " + cfgFile.toAbsolutePath());
 		tool.log("Local ... " + localSparql);
 		tool.log("Updater . " + remoteServerUpdater);
 		tool.log("Remote .. " + remoteServer);
@@ -133,8 +144,12 @@ public class WikidataChangesUpdater {
 		HDTOptions config = HDTOptions.of();
 
 		try {
-			config = HDTOptions.readFromFile(CONFIG_FILE);
+			config = HDTOptions.readFromFile(cfgFile);
 		} catch (FileNotFoundException ignored) {
+		}
+		try (BufferedWriter w = Files.newBufferedWriter(cfgFile)) {
+			config.write(w, false);
+			w.flush();
 		}
 
 		String lastdate = cl.getOptionValue(dateOpt, config.get("lastdate", ""));
@@ -172,21 +187,27 @@ public class WikidataChangesUpdater {
 
 		Set<Statement> deltaAdd = new HashSet<>();
 		Set<Statement> deltaRemove = new HashSet<>();
+		long run = 0;
 		while (true) {
 			Instant now = Instant.now();
-			Thread.sleep(deltaFetch);
-			tool.log("Lookup to date '" + inst + "'");
+			if (run++ != 0) {
+				Thread.sleep(deltaFetch);
+			}
+			tool.log("Lookup to date '" + inst + "', run: " + run);
 			ChangesIterable<Change> changes = fetcher.getChanges(Date.from(inst), 500, true);
 
 			downloads.set(0);
 
+			tool.log("Connecting to sparql repository: " + localSparql);
 			Repository sparqlRepository = new SPARQLRepository(localSparql);
 			sparqlRepository.init();
 
-			Object sparqlSync = new Object() {
+			Lock sparqlLock = new ReentrantLock();
+			Object logLock = new Object() {
 			};
 
 			long i = 0;
+			tool.log("finding changes...");
 			for (Change change : changes) {
 				if (!change.getTitle().isEmpty() && change.getNs() == 0) {
 					long d = ++i;
@@ -198,6 +219,7 @@ public class WikidataChangesUpdater {
 
 			inst = now;
 			if (urls.size() < minLength) {
+				tool.log(urls.size() + " changes, waiting...");
 				continue;
 			}
 
@@ -209,41 +231,101 @@ public class WikidataChangesUpdater {
 			List<? extends Future<UpdateData>> futures = urls.stream()
 					.map(change -> pool.submit(() -> {
 						final String qid = change.getTitle();
-						String url = "https://www.wikidata.org/wiki/Special:EntityData/" + qid + ".ttl?flavor=dump";
+						String lastQuery = null;
+						try {
 
-						byte[] file = fetcher.downloadPage(new URL(url), urlHeader, 10, 500, true);
+							String baseURI = remoteServer + qid;
 
-						Collection<Statement> lstNew = new HashSet<>();
-						RDFParser rdfParser = Rio.createParser(RDFFormat.TURTLE);
-						try (GraphQueryResult res = QueryResults.parseGraphBackground(new ByteArrayInputStream(file),  null, rdfParser, null)) {
-							while (res.hasNext()) {
-								Statement st = res.next();
-								if (!st.getPredicate().toString().equals("http://www.w3.org/2004/02/skos/core#prefLabel")) {
-									if (((((!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") || !st.getObject().toString().equals("http://wikiba.se/ontology#Statement")) && (!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") || !st.getObject().toString().equals("http://wikiba.se/ontology#Item"))) && (!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type") || !st.getObject().toString().equals("http://wikiba.se/ontology#Reference"))) && (!st.getPredicate().toString().equals("http://schema.org/softwareVersion") && !st.getPredicate().toString().equals("http://wikiba.se/ontology#statements") && !st.getPredicate().toString().equals("http://wikiba.se/ontology#sitelinks") && !st.getPredicate().toString().equals("http://wikiba.se/ontology#identifiers") && !st.getPredicate().toString().equals("http://creativecommons.org/ns#license") && !st.getPredicate().toString().equals("http://schema.org/version"))) && !st.getPredicate().toString().equals("http://schema.org/name")) {
-										lstNew.add(st);
+							byte[] file = fetcher.downloadPage(new URL(baseURI + ".ttl?flavor=dump"), urlHeader, 10, 500, true);
+
+							Collection<Statement> lstNew = new HashSet<>();
+
+							if (file != null) {
+								RDFParser rdfParser = new TurtleParser();
+								try (GraphQueryResult res = QueryResults.parseGraphBackground(new ByteArrayInputStream(file), baseURI, rdfParser, null)) {
+									while (res.hasNext()) {
+										Statement st = res.next();
+										if (!st.getPredicate().toString().equals("http://www.w3.org/2004/02/skos/core#prefLabel")) {
+											// fixme: better tree
+											if (
+													(
+															(
+																	(
+																			(
+																					!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+																					|| !st.getObject().toString().equals("http://wikiba.se/ontology#Statement")
+																			)
+																			&& (
+																					!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+																					|| !st.getObject().toString().equals("http://wikiba.se/ontology#Item")
+																			)
+																	)
+																	&& (
+																			!st.getPredicate().toString().equals("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+																			|| !st.getObject().toString().equals("http://wikiba.se/ontology#Reference")
+																	)
+															)
+															&& (!st.getPredicate().toString().equals("http://schema.org/softwareVersion")
+															    && !st.getPredicate().toString().equals("http://wikiba.se/ontology#statements")
+															    && !st.getPredicate().toString().equals("http://wikiba.se/ontology#sitelinks")
+															    && !st.getPredicate().toString().equals("http://wikiba.se/ontology#identifiers")
+															    && !st.getPredicate().toString().equals("http://creativecommons.org/ns#license")
+															    && !st.getPredicate().toString().equals("http://schema.org/version")
+															)
+													)
+													&& !st.getPredicate().toString().equals("http://schema.org/name")) {
+												lstNew.add(st);
+											}
+										}
 									}
 								}
 							}
-						}
-						Collection<Statement> lstCurr = new HashSet<>();
+							Collection<Statement> lstCurr = new HashSet<>();
 
-						try (RepositoryConnection connection = sparqlRepository.getConnection()) {
-							// Execute the SPARQL query and get the result directly into the repository
-							try (GraphQueryResult evaluate = connection.prepareGraphQuery(QueryLanguage.SPARQL, "CONSTRUCT {?s ?p ?o . ?o ?p2 ?o2 .  ?o2 ?pTime ?oTime . ?o2 ?pQuantity ?oQuantity . ?o2 ?pCoor ?oCoor . ?o prov:wasDerivedFrom ?r . ?r ?p3 ?o3 . ?o3 ?p4 ?o4 .  } WHERE { VALUES ?s { wd:"+qid+" } ?s ?p ?o . OPTIONAL {?o wikibase:rank ?rank . ?o ?p2 ?o2 OPTIONAL {?o2 a wikibase:TimeValue . OPTIONAL {?o2 ?pTime ?oTime } } OPTIONAL {?o2 a wikibase:QuantityValue . OPTIONAL {?o2 ?pQuantity ?oQuantity } } OPTIONAL {?o2 a wikibase:GlobecoordinateValue . OPTIONAL {?o2 ?pCoor ?oCoor } } OPTIONAL { ?o prov:wasDerivedFrom ?r . OPTIONAL { ?r ?p3 ?o3 OPTIONAL {?o3 a wikibase:TimeValue . OPTIONAL {?o3 ?p4 ?o4 } }} } } }").evaluate()) {
-								evaluate.forEach(lstCurr::add);
+							if (syncRequest) {
+								sparqlLock.lock();
+							}
+							try {
+								try (RepositoryConnection connection = sparqlRepository.getConnection()) {
+									// Execute the SPARQL query and get the result directly into the repository
+									GraphQuery gq1 = connection.prepareGraphQuery(QueryLanguage.SPARQL, lastQuery = "CONSTRUCT {?s ?p ?o . ?o ?p2 ?o2 .  ?o2 ?pTime ?oTime . ?o2 ?pQuantity ?oQuantity . ?o2 ?pCoor ?oCoor . ?o prov:wasDerivedFrom ?r . ?r ?p3 ?o3 . ?o3 ?p4 ?o4 .  } WHERE { VALUES ?s { wd:" + qid + " } ?s ?p ?o . OPTIONAL {?o wikibase:rank ?rank . ?o ?p2 ?o2 OPTIONAL {?o2 a wikibase:TimeValue . OPTIONAL {?o2 ?pTime ?oTime } } OPTIONAL {?o2 a wikibase:QuantityValue . OPTIONAL {?o2 ?pQuantity ?oQuantity } } OPTIONAL {?o2 a wikibase:GlobecoordinateValue . OPTIONAL {?o2 ?pCoor ?oCoor } } OPTIONAL { ?o prov:wasDerivedFrom ?r . OPTIONAL { ?r ?p3 ?o3 OPTIONAL {?o3 a wikibase:TimeValue . OPTIONAL {?o3 ?p4 ?o4 } }} } } }");
+									gq1.setMaxExecutionTime(0);
+									try (GraphQueryResult evaluate = gq1.evaluate()) {
+										evaluate.forEach(lstCurr::add);
+									}
+
+									GraphQuery gq2 = connection.prepareGraphQuery(QueryLanguage.SPARQL, lastQuery = "CONSTRUCT {?wikipedia <http://schema.org/about> wd:" + qid + " . ?wikipedia ?pWikipedia ?oWikipedia . ?oWikipedia <http://wikiba.se/ontology#wikiGroup> ?o2Wikipedia } WHERE { ?wikipedia <http://schema.org/about> wd:" + qid + " . OPTIONAL { ?wikipedia ?pWikipedia ?oWikipedia OPTIONAL {?oWikipedia <http://wikiba.se/ontology#wikiGroup> ?o2Wikipedia } } }");
+									gq2.setMaxExecutionTime(0);
+									try (GraphQueryResult res2 = gq2.evaluate()) {
+										res2.forEach(lstCurr::add);
+									}
+								}
+							} finally {
+								if (syncRequest) {
+									sparqlLock.unlock();
+								}
+							}
+							lastQuery = null;
+
+							if (file != null) {
+								computeDelta(lstCurr, lstNew);
 							}
 
-							try (GraphQueryResult res2 = connection.prepareGraphQuery(QueryLanguage.SPARQL, "CONSTRUCT {?wikipedia <http://schema.org/about> wd:" + qid + " . ?wikipedia ?pWikipedia ?oWikipedia . ?oWikipedia <http://wikiba.se/ontology#wikiGroup> ?o2Wikipedia } WHERE { ?wikipedia <http://schema.org/about> wd:" + qid + " . OPTIONAL { ?wikipedia ?pWikipedia ?oWikipedia OPTIONAL {?oWikipedia <http://wikiba.se/ontology#wikiGroup> ?o2Wikipedia } } }").evaluate()) {
-								res2.forEach(lstCurr::add);
+							long dc = downloads.incrementAndGet();
+
+							if (urls.size() < 10 || dc % (urls.size() / 10) == 0) {
+								synchronized (logLock) {
+									WikidataChangesFetcher.printPercentage(dc, urls.size(), "fetch: " + urls.size(), true);
+								}
 							}
+
+							return new UpdateData(lstNew, lstCurr);
+						} catch (Exception e) {
+							throw new IOException("Can't update QID:" + qid + (lastQuery != null ? (", lastquery:\n" + lastQuery) : ""), e);
 						}
-
-
-						computeDelta(lstCurr, lstNew);
-
-						return new UpdateData(lstNew, lstCurr);
 					}))
 					.toList();
+			System.out.println(); // percentage
 
 			try {
 				for (Future<UpdateData> f : futures) {
@@ -257,6 +339,9 @@ public class WikidataChangesUpdater {
 
 				Iterator<Statement> itdel = deltaRemove.iterator();
 
+				long updateTotal = 0;
+				long updateEnd = deltaRemove.size() + deltaAdd.size();
+				long updateDelta = updateEnd <= 10 ? 1 : (updateEnd / 10);
 				while (itdel.hasNext()) {
 					int added = 0;
 
@@ -271,13 +356,27 @@ public class WikidataChangesUpdater {
 					String query = delete.getQueryString();
 
 					// send update
-					try (RepositoryConnection conn = sparqlRepository.getConnection()) {
-						conn.begin();
 
-						conn.prepareUpdate(query).execute();
-
-						conn.commit();
+					if (syncRequest) {
+						sparqlLock.lock();
 					}
+					try {
+						try (RepositoryConnection conn = sparqlRepository.getConnection()) {
+							conn.begin();
+
+							conn.prepareUpdate(query).execute();
+
+							conn.commit();
+						}
+					} finally {
+						if (syncRequest) {
+							sparqlLock.unlock();
+						}
+					}
+					if (updateTotal % updateDelta == 0) {
+						WikidataChangesFetcher.printPercentage(updateTotal, updateEnd, "update " + updateTotal, true);
+					}
+					updateTotal += added;
 				}
 				Iterator<Statement> itadd = deltaAdd.iterator();
 
@@ -295,24 +394,43 @@ public class WikidataChangesUpdater {
 					String query = insert.getQueryString();
 
 					// send update
-					try (RepositoryConnection conn = sparqlRepository.getConnection()) {
-						conn.begin();
-
-						conn.prepareUpdate(query).execute();
-
-						conn.commit();
+					if (syncRequest) {
+						sparqlLock.lock();
 					}
+					try {
+						try (RepositoryConnection conn = sparqlRepository.getConnection()) {
+							conn.begin();
+
+							conn.prepareUpdate(query).execute();
+
+							conn.commit();
+						}
+					} finally {
+						if (syncRequest) {
+							sparqlLock.unlock();
+						}
+					}
+					if (updateTotal % updateDelta == 0) {
+						WikidataChangesFetcher.printPercentage(updateTotal, updateEnd, "update " + updateTotal, true);
+					}
+					updateTotal += added;
 				}
+				System.out.println(); // percentage
+
+				tool.log("applied update with " + updateTotal + " elements");
 
 				deltaAdd.clear();
 				deltaRemove.clear();
 
 				config.set("lastdate", now.toString());
-				config.write(Path.of(CONFIG_FILE));
+				try (BufferedWriter w = Files.newBufferedWriter(cfgFile)) {
+					config.write(w, false);
+					w.flush();
+				}
 			} catch (ExecutionException e) {
 				pool.shutdownNow();
 				sparqlRepository.shutDown();
-				throw new IOException("Wasn't able to download all the files", e.getCause());
+				throw new IOException("Wasn't able to fetch the updates", e.getCause());
 			}
 
 			sparqlRepository.shutDown();
@@ -322,8 +440,9 @@ public class WikidataChangesUpdater {
 
 	/**
 	 * Compute the delta of 2 statement datasets and put the results inside 2 datasets for add/remove
+	 *
 	 * @param currentStmts current stmts in the system
-	 * @param newStmts stmts from the update
+	 * @param newStmts     stmts from the update
 	 */
 	private static void computeDelta(Collection<Statement> currentStmts, Collection<Statement> newStmts) {
 
@@ -336,12 +455,13 @@ public class WikidataChangesUpdater {
 				continue;
 			}
 
-			if (!currentStmts.removeIf(testEq(newMember))) {
+			if (currentStmts.removeIf(testEq(newMember))) {
 				newMembersIt.remove();
 			}
 		}
 
 	}
+
 	public static Predicate<Statement> testEq(Statement other) {
 		return stmt -> {
 			if (!Objects.equals(stmt.getSubject(), other.getSubject())) return false;
@@ -373,6 +493,6 @@ public class WikidataChangesUpdater {
 
 		double d1 = l1.doubleValue();
 		double d2 = l2.doubleValue();
-		return Math.abs(d1 - d2) < 0.000000001;
+		return Math.abs(d1 - d2) < EPSILON;
 	}
 }
