@@ -5,6 +5,10 @@ Tool to extract diff from a wikibase instance
 - [wikibase-changes](#wikibase-changes)
   - [Required](#required)
   - [Install](#install)
+    - [Installation](#installation)
+      - [Scoop](#scoop)
+      - [Brew](#brew)
+      - [Command Line Interface](#command-line-interface)
   - [Usage](#usage)
   - [Steps](#steps)
     - [Read updates](#read-updates)
@@ -14,6 +18,8 @@ Tool to extract diff from a wikibase instance
       - [Cat HDTs](#cat-hdts)
       - [Create index](#create-index)
   - [Up to date script](#up-to-date-script)
+  - [Diff experiment](#diff-experiment)
+  - [Publications](#publications)
 
 ## Required
 
@@ -22,8 +28,34 @@ Tool to extract diff from a wikibase instance
 
 ## Install
 
-You can download the latest version in the [release section](https://github.com/the-qa-company/wiki-changes/releases).
+### Installation
 
+#### Scoop
+
+You can install WikiChanges using the [Scoop package manager](http://scoop.sh/).
+
+You need to add the [`the-qa-company` bucket](https://github.com/the-qa-company/scoop-bucket), and then you will be able to install the `wikichanges` manifest, it can be done using these commands
+
+```powershell
+# Add the-qa-company bucket
+scoop bucket add the-qa-company https://github.com/the-qa-company/scoop-bucket.git
+# Install WikiChanges CLI
+scoop install wikichanges
+```
+
+#### Brew
+
+You can install WikiChanges using the [Brew package manager](http://brew.sh/).
+
+You can install is using this command
+
+```bash
+brew install the-qa-company/tap/wikichanges
+```
+
+#### Command Line Interface
+
+If you don't have access to Brew or Scoop, the WikiChanges command line interface is available in [the releases page](https://github.com/the-qa-company/wiki-changes/releases) under the file `wikidata-changes.zip`. By extracting it, you can a bin directory that can be added to your path.
 
 You can also clone and compile the jar by yourself with these commands
 
@@ -139,3 +171,7 @@ java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesComp
 java -cp wiki-changes.jar com.the_qa_company.wikidatachanges.WikidataChangesCompute catdiffonly wikidata.hdt bitmap.bin delta.hdt
 ```
 
+## Publications
+
+- Willerval Antoine, Dennis Diefenbach, and Pierre Maret. "Easily setting up a local Wikidata SPARQL endpoint using the qEndpoint." Workshop ISWC (2022). [PDF](https://www.researchgate.net/publication/364321138_Easily_setting_up_a_local_Wikidata_SPARQL_endpoint_using_the_qEndpoint)
+- Willerval Antoine, Dennis Diefenbach, Angela Bonifati. "Generate and Update Large HDT RDF Knowledge Graphs on Commodity Hardware" ESWC (2024). [PDF](https://www.researchgate.net/publication/379507028_Generate_and_Update_Large_HDT_RDF_Knowledge_Graphs_on_Commodity_Hardware)
