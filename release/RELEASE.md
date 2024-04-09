@@ -1,4 +1,3 @@
 **Changelog 📓**
 
-- Better cli
-- add license to deployement
+- Updater using diff
